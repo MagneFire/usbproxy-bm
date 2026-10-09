@@ -6,6 +6,7 @@
 #include "fw.h"
 #include "tusb.h"
 #include "usb/gadget_slots.h"
+#include "usb/host_mgr.h"
 
 #define LINE_MAX 96
 
@@ -78,6 +79,8 @@ static void cmd_status(void)
 			(unsigned long)st->in_pkts, (unsigned long)st->in_bytes);
 		con_out(buf);
 	}
+	host_status_line(buf, sizeof buf);
+	con_out(buf);
 	snprintf(buf, sizeof buf, "fault=%s\n", log_fault() ? log_fault() : "none");
 	con_out(buf);
 }
@@ -91,7 +94,7 @@ static void run(char *s)
 	char buf[48];
 	if (!strcmp(c, "help")) {
 		con_out("status log [bytes] reboot uboot hang hangnext panic mem <addr> [words] "
-			"gp <n> [val] led <g|r> <0|1> loop <slot> <0|1> detach attach\n");
+			"gp <n> [val] led <g|r> <0|1> loop <slot> <0|1> detach attach hostxfer <in|out> <n> [slot]\n");
 	} else if (!strcmp(c, "status")) {
 		cmd_status();
 	} else if (!strcmp(c, "log")) {
@@ -132,6 +135,12 @@ static void run(char *s)
 	} else if (!strcmp(c, "led") && argc > 2) {
 		int on = argv[2][0] == '1';
 		if (argv[1][0] == 'g') led_green(on); else led_red(on);
+	} else if (!strcmp(c, "hostxfer") && argc > 2) {
+		/* hostxfer <in|out> <bytes> [slot]: one bulk transfer on the watch */
+		int slot = argc > 3 ? (int)strtoul(argv[3], 0, 0) : 0;
+		int r = host_test_xfer(slot, argv[1][0] == 'i', strtoul(argv[2], 0, 0));
+		snprintf(buf, sizeof buf, "hostxfer: %s\n", r == 0 ? "submitted" : r == -1 ? "slot not bound" : "submit failed");
+		con_out(buf);
 	} else if (!strcmp(c, "loop") && argc > 2) {
 		slots_loopback((int)strtoul(argv[1], 0, 0), argv[2][0] == '1');
 	} else if (!strcmp(c, "detach")) {

@@ -2,6 +2,7 @@
  * RTC stamps/guards, log ring, MMU, GIC + 1 ms tick, LEDs. */
 #include "fw.h"
 #include "tusb.h"
+#include "usb/host_mgr.h"
 
 uint32_t g_entry_ms;
 int g_up;
@@ -41,11 +42,16 @@ int main(void)
 	const tusb_rhport_init_t rh_init = { .role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_HIGH };
 	tusb_init(0, &rh_init);
 	log_printf("usb: gadget %s initialised, waiting for the host\n", gadget_serial());
+	const tusb_rhport_init_t host_init = { .role = TUSB_ROLE_HOST, .speed = TUSB_SPEED_HIGH };
+	tusb_rhport_init(1, &host_init);
+	log_printf("usb: host on EHCI1 initialised\n");
 
 	console_init();
 	uint32_t last_blink = 0;
 	for (;;) {
 		tud_task();
+		tuh_task();
+		host_mgr_poll();
 		console_poll();
 		wdt_feed();
 		uint32_t t = tick_count();
