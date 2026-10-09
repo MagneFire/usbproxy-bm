@@ -51,6 +51,7 @@ static inline void clrbits(uintptr_t a, uint32_t m) { REG32(a) &= ~m; }
 #define H3_GICD         0x01c81000u
 #define H3_GICC         0x01c82000u
 #define IRQ_PPI_TIMER   30              /* non-secure physical timer */
+#define IRQ_PPI_TIMER_S 29              /* secure physical timer (we run secure) */
 #define IRQ_MUSB        (32 + 71)       /* 103 */
 #define IRQ_EHCI1       (32 + 74)       /* 106 */
 #define IRQ_OHCI1       (32 + 75)       /* 107 */
@@ -86,6 +87,9 @@ void uart_flush(void);
 void gic_init(void);
 void gic_enable(unsigned id, void (*fn)(void));
 void gic_disable(unsigned id);
+void gic_set_handler(unsigned id, void (*fn)(void));
+void gic_mask(unsigned id);
+void gic_unmask(unsigned id);
 void irq_handler(void);
 
 void timer_init(void);

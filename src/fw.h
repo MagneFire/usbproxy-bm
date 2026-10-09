@@ -20,10 +20,13 @@ unsigned long strtoul(const char *s, char **end, int base);
 void log_init(void);
 void log_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void log_write(const char *s, size_t n);
-void log_dump(size_t last);
+void log_dump(size_t last, void (*out)(const char *));
 void log_set_fault(const char *s);
 const char *log_fault(void);
 uint32_t log_boots(void);
+
+/* usb */
+const char *gadget_serial(void);
 
 /* console */
 void console_init(void);

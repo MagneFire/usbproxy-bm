@@ -56,15 +56,22 @@ void log_printf(const char *fmt, ...)
 	log_write(buf, (size_t)n);
 }
 
-void log_dump(size_t last)
+void log_dump(size_t last, void (*out)(const char *))
 {
 	if (!H) return;
 	uint32_t avail = H->total < H->size ? H->total : H->size;
 	if (last > avail) last = avail;
 	uint32_t pos = (H->head + H->size - (uint32_t)last) % H->size;
-	for (size_t i = 0; i < last; i++) {
-		uart_putc(D[pos]);
-		pos = (pos + 1) % H->size;
+	char chunk[65];
+	while (last) {
+		size_t n = last < 64 ? last : 64;
+		for (size_t i = 0; i < n; i++) {
+			chunk[i] = D[pos];
+			pos = (pos + 1) % H->size;
+		}
+		chunk[n] = 0;
+		out(chunk);
+		last -= n;
 	}
 }
 

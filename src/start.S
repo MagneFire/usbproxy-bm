@@ -24,13 +24,26 @@ _start:
         .text
 reset:
         cpsid   if
-        /* D-cache on (U-Boot `go`)? Clean+invalidate it first: U-Boot's loady
-         * wrote this very image through it. */
-        mrc     p15, 0, r0, c1, c0, 0
-        tst     r0, #(1 << 2)
-        beq     1f
+        /* Clean+invalidate the D-cache whatever its state: after U-Boot's
+         * `go` it is on and holds this very image (loady wrote it through the
+         * cache); after the Falcon jump it is off but may hold stale clean
+         * lines. One DCCISW pass leaves it clean and empty, and nothing can
+         * dirty it again before it is disabled below. (A second,
+         * invalidate-only pass with the caches off hung the A7 at this point;
+         * not needed, not done.) */
         bl      dcache_clean_invalidate_all
-1:      mrc     p15, 0, r0, c1, c0, 0
+        /* Belt and braces: also clean+invalidate our own image by address
+         * (DCCIMVAC), line by line. The set/way pass above was observed NOT
+         * to land the loady'd image in DRAM on this A7 (2026-10-10). */
+        ldr     r0, =_start
+        ldr     r1, =__ram_end
+        bic     r0, r0, #63
+7:      mcr     p15, 0, r0, c7, c14, 1
+        add     r0, r0, #64
+        cmp     r0, r1
+        blo     7b
+        dsb
+        mrc     p15, 0, r0, c1, c0, 0
         bic     r0, r0, #(1 << 0) | (1 << 2)            /* M, C */
         bic     r0, r0, #(1 << 11) | (1 << 12) | (1 << 13) /* Z, I, V */
         mcr     p15, 0, r0, c1, c0, 0
@@ -41,7 +54,6 @@ reset:
         mcr     p15, 0, r0, c8, c7, 0           /* TLBIALL */
         dsb
         isb
-        bl      dcache_invalidate_all
 
         ldr     r0, =_start
         mcr     p15, 0, r0, c12, c0, 0          /* VBAR */

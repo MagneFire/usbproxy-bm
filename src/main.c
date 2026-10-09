@@ -1,6 +1,7 @@
 /* usbproxy-bm: the superloop. M0 = runtime skeleton: UART console, watchdog,
  * RTC stamps/guards, log ring, MMU, GIC + 1 ms tick, LEDs. */
 #include "fw.h"
+#include "tusb.h"
 
 uint32_t g_entry_ms;
 int g_up;
@@ -18,9 +19,10 @@ int main(void)
 	led_init();
 	led_green(1);
 	log_init();
-	log_printf("boot %u: entry at %u ms, gp0=%08x gp1=%08x gp2=%08x gp3=%08x wdt=%d\n",
-		   log_boots(), g_entry_ms, rtc_gp_read(0), rtc_gp_read(1),
-		   rtc_gp_read(2), rtc_gp_read(3), wdt_armed());
+	log_printf("boot %lu: entry at %lu ms, gp0=%08lx gp1=%08lx gp2=%08lx gp3=%08lx wdt=%d\n",
+		   (unsigned long)log_boots(), (unsigned long)g_entry_ms,
+		   (unsigned long)rtc_gp_read(0), (unsigned long)rtc_gp_read(1),
+		   (unsigned long)rtc_gp_read(2), (unsigned long)rtc_gp_read(3), wdt_armed());
 	if (log_fault())
 		log_printf("previous boot fault: %s\n", log_fault());
 	wdt_arm();
@@ -34,15 +36,16 @@ int main(void)
 			;
 	}
 
-	/* "Up" for the SPL's purposes. From M1 on this moves to the point where
-	 * the gadget is configured by the host. */
-	rtc_gp_write(1, 0);
-	g_up = 1;
-	log_printf("up: GP1 cleared\n");
+	/* "Up" (GP1 cleared) happens in tud_mount_cb: the host configured the
+	 * gadget. Until then the SPL's guard still points at U-Boot proper. */
+	const tusb_rhport_init_t rh_init = { .role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_HIGH };
+	tusb_init(0, &rh_init);
+	log_printf("usb: gadget %s initialised, waiting for the host\n", gadget_serial());
 
 	console_init();
 	uint32_t last_blink = 0;
 	for (;;) {
+		tud_task();
 		console_poll();
 		wdt_feed();
 		uint32_t t = tick_count();

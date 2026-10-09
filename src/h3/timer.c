@@ -37,5 +37,9 @@ void timer_init(void)
 	uint32_t tval = CNT_HZ / 1000, ctl = 1;
 	__asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(tval));
 	__asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(ctl));    /* CNTP_CTL: enable */
+	/* In secure PL1 (no monitor, where the SPL leaves us) CNTP_* drive the
+	 * secure physical timer, PPI 29; PPI 30 is the non-secure one. Enable
+	 * both so the tick works whichever state a loader hands us. */
+	gic_enable(IRQ_PPI_TIMER_S, tick_irq);
 	gic_enable(IRQ_PPI_TIMER, tick_irq);
 }

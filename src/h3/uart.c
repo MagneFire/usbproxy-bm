@@ -12,19 +12,34 @@
 #define UART_LSR  (H3_UART0 + 0x14)
 #define UART_USR  (H3_UART0 + 0x7c)
 
+/* DesignWare quirk: a write to LCR while the UART is busy (USR.busy: a
+ * character shifting out, or RX active) is silently ignored, which can
+ * leave DLAB set and send every later THR write into the divisor. Drain
+ * first, then write LCR until it reads back (Linux dw8250_check_lcr). */
+static void lcr_write(uint32_t v)
+{
+	for (int i = 0; i < 1000; i++) {
+		writel(v, UART_LCR);
+		if ((readl(UART_LCR) & 0xff) == v)
+			return;
+		(void)readl(UART_USR);
+		delay_us(10);
+	}
+}
+
 void uart_init(void)
 {
 	ccu_uart0_enable();
-	/* Wait for the DW UART to go idle before touching LCR, else the write is
-	 * ignored (USR.busy). The SPL/U-Boot left it configured, so this is
-	 * mostly a no-op re-init at the same rate. */
-	for (int i = 0; i < 100000 && (readl(UART_USR) & 1); i++)
-		;
+	/* Let whatever the SPL/U-Boot queued finish before reprogramming. */
+	for (int i = 0; i < 20000 && !(readl(UART_LSR) & 0x40); i++)
+		delay_us(1);
+	for (int i = 0; i < 20000 && (readl(UART_USR) & 1); i++)
+		delay_us(1);
 	writel(0, UART_IER);
-	writel(0x80, UART_LCR);
+	lcr_write(0x80);
 	writel(13, UART_DLL);           /* 24 MHz / (16 * 115200) = 13.02 */
 	writel(0, UART_DLH);
-	writel(0x03, UART_LCR);         /* 8N1 */
+	lcr_write(0x03);                /* 8N1 */
 	writel(0x07, UART_FCR);         /* FIFOs on, both reset */
 }
 

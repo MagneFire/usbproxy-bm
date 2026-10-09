@@ -22,7 +22,12 @@ KSECTOR := 100352          # 0x18800, applib.KERNEL_SECTOR
 SRCS := src/start.S src/h3/cache.S \
         src/main.c src/h3/uart.c src/h3/gic.c src/h3/timer.c src/h3/wdt.c \
         src/h3/rtc.c src/h3/mmu.c src/h3/exceptions.c src/h3/led.c src/h3/ccu.c \
-        src/console/console.c src/console/log.c src/lib/libc.c src/lib/fmt.c
+        src/console/console.c src/console/log.c src/lib/libc.c src/lib/fmt.c \
+        src/usb/dcd_h3_musb.c src/usb/usbphy.c src/usb/usb_descriptors.c \
+        src/usb/gadget_slots.c src/usb/tusb_port.c \
+        $(TUSB)/tusb.c $(TUSB)/common/tusb_fifo.c $(TUSB)/device/usbd.c \
+        $(TUSB)/class/cdc/cdc_device.c
+GADGET_SERIAL ?= USBPROXYBM
 
 OBJS := $(patsubst %,$(BUILD)/%.o,$(SRCS))
 
@@ -30,7 +35,7 @@ CFLAGS := -mcpu=cortex-a7 -marm -mfloat-abi=soft -ffreestanding -nostdlib \
           -Os -g -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
           -ffunction-sections -fdata-sections -fno-common \
           -Isrc -Isrc/usb -I$(TUSB) \
-          -DGITREV=\"$(GITREV)$(DIRTY)\" -DCFG_TUSB_MCU=OPT_MCU_NONE
+          -DGITREV=\"$(GITREV)$(DIRTY)\" -DCFG_TUSB_MCU=OPT_MCU_NONE -DGADGET_SERIAL=\"$(GADGET_SERIAL)\"
 ASFLAGS := $(CFLAGS)
 LDFLAGS := -nostdlib -T ld/fw.ld -Wl,--gc-sections -Wl,--no-warn-rwx-segments -Wl,-Map=$(BUILD)/fw.map
 

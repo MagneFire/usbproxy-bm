@@ -1,14 +1,45 @@
-/* Line console on the UART (and, from M1, the gadget's CDC-ACM). Not a
- * shell: a fixed command set appliance.py's `bm` transport can parse.
- * `status` prints key=value lines. */
+/* Line console on the UART and on the gadget's CDC-ACM port, same command
+ * set, same parser (one line buffer per port). Not a shell: a fixed command
+ * set appliance.py's `bm` transport can parse. `status` prints key=value
+ * lines. */
 #include <string.h>
 #include "fw.h"
+#include "tusb.h"
+#include "usb/gadget_slots.h"
 
 #define LINE_MAX 96
-static char line[LINE_MAX];
-static int len;
 
-static void prompt(void) { uart_puts("bm> "); }
+struct con {
+	const char *name;
+	void (*puts)(const char *);
+	char line[LINE_MAX];
+	int len;
+};
+
+static void cdc_puts(const char *s)
+{
+	if (!tud_cdc_connected())
+		return;
+	size_t n = strlen(s);
+	uint32_t deadline = time_ms() + 200;
+	while (n) {
+		uint32_t w = tud_cdc_write(s, n);
+		s += w; n -= w;
+		tud_cdc_write_flush();
+		if (!w) {
+			if ((int32_t)(time_ms() - deadline) > 0)
+				return;		/* host not reading; drop the rest */
+			tud_task();
+		}
+	}
+}
+
+static struct con con_uart = { "uart", uart_puts, {0}, 0 };
+static struct con con_cdc = { "cdc", cdc_puts, {0}, 0 };
+static struct con *cur = &con_uart;
+
+static void con_out(const char *s) { cur->puts(s); }
+static void prompt(void) { con_out("bm> "); }
 
 static int argsplit(char *s, char **argv, int max)
 {
@@ -25,16 +56,30 @@ static int argsplit(char *s, char **argv, int max)
 
 static void cmd_status(void)
 {
-	char buf[160];
-	int n = snprintf(buf, sizeof buf,
-		"build=%s\nuptime_ms=%u\nentry_ms=%u\nticks=%u\nboots=%u\nup=%d\n"
-		"gp0=%08x\ngp1=%08x\ngp2=%08x\ngp3=%08x\nwdt=%d\n",
-		GITREV, time_ms(), g_entry_ms, tick_count(), log_boots(), g_up,
-		rtc_gp_read(0), rtc_gp_read(1), rtc_gp_read(2), rtc_gp_read(3), wdt_armed());
-	uart_puts(buf);
+	char buf[200];
+	snprintf(buf, sizeof buf,
+		"build=%s\nserial=%s\nuptime_ms=%lu\nentry_ms=%lu\nticks=%lu\nboots=%lu\nup=%d\n",
+		GITREV, gadget_serial(), (unsigned long)time_ms(), (unsigned long)g_entry_ms,
+		(unsigned long)tick_count(), (unsigned long)log_boots(), g_up);
+	con_out(buf);
+	snprintf(buf, sizeof buf, "gp0=%08lx\ngp1=%08lx\ngp2=%08lx\ngp3=%08lx\nwdt=%d\n",
+		(unsigned long)rtc_gp_read(0), (unsigned long)rtc_gp_read(1),
+		(unsigned long)rtc_gp_read(2), (unsigned long)rtc_gp_read(3), wdt_armed());
+	con_out(buf);
+	snprintf(buf, sizeof buf, "usb_mounted=%d\nusb_speed=%s\nusb_suspended=%d\ncdc_connected=%d\n",
+		tud_mounted(), tud_speed_get() == TUSB_SPEED_HIGH ? "high" : "full",
+		tud_suspended(), tud_cdc_connected());
+	con_out(buf);
+	for (int i = 0; i < SLOT_COUNT; i++) {
+		const struct slot_stats *st = slots_stats(i);
+		snprintf(buf, sizeof buf, "slot%d=open:%d loop:%d out:%lu/%lu zlp:%lu in:%lu/%lu\n", i,
+			st->open, slots_loopback_on(i), (unsigned long)st->out_pkts,
+			(unsigned long)st->out_bytes, (unsigned long)st->out_zlp,
+			(unsigned long)st->in_pkts, (unsigned long)st->in_bytes);
+		con_out(buf);
+	}
 	snprintf(buf, sizeof buf, "fault=%s\n", log_fault() ? log_fault() : "none");
-	uart_puts(buf);
-	(void)n;
+	con_out(buf);
 }
 
 static void run(char *s)
@@ -43,13 +88,14 @@ static void run(char *s)
 	int argc = argsplit(s, argv, 6);
 	if (!argc) return;
 	const char *c = argv[0];
+	char buf[48];
 	if (!strcmp(c, "help")) {
-		uart_puts("status log [bytes] reboot uboot hang hangnext panic mem <addr> [words] "
-			  "gp <n> [val] led <g|r> <0|1>\n");
+		con_out("status log [bytes] reboot uboot hang hangnext panic mem <addr> [words] "
+			"gp <n> [val] led <g|r> <0|1> loop <slot> <0|1> detach attach\n");
 	} else if (!strcmp(c, "status")) {
 		cmd_status();
 	} else if (!strcmp(c, "log")) {
-		log_dump(argc > 1 ? strtoul(argv[1], 0, 0) : 4096);
+		log_dump(argc > 1 ? strtoul(argv[1], 0, 0) : 4096, con_out);
 	} else if (!strcmp(c, "reboot")) {
 		log_printf("reboot requested\n");
 		wdt_reset_now();
@@ -73,48 +119,67 @@ static void run(char *s)
 	} else if (!strcmp(c, "mem") && argc > 1) {
 		uint32_t a = strtoul(argv[1], 0, 16) & ~3u;
 		unsigned n = argc > 2 ? strtoul(argv[2], 0, 0) : 1;
-		char buf[32];
 		for (unsigned i = 0; i < n; i++) {
-			snprintf(buf, sizeof buf, "%08x: %08x\n", a + 4 * i, readl(a + 4 * i));
-			uart_puts(buf);
+			snprintf(buf, sizeof buf, "%08lx: %08lx\n", (unsigned long)(a + 4 * i),
+				 (unsigned long)readl(a + 4 * i));
+			con_out(buf);
 		}
 	} else if (!strcmp(c, "gp") && argc > 1) {
 		unsigned n = strtoul(argv[1], 0, 0) & 3;
 		if (argc > 2) rtc_gp_write(n, strtoul(argv[2], 0, 16));
-		char buf[24];
-		snprintf(buf, sizeof buf, "gp%u=%08x\n", n, rtc_gp_read(n));
-		uart_puts(buf);
+		snprintf(buf, sizeof buf, "gp%u=%08lx\n", n, (unsigned long)rtc_gp_read(n));
+		con_out(buf);
 	} else if (!strcmp(c, "led") && argc > 2) {
 		int on = argv[2][0] == '1';
 		if (argv[1][0] == 'g') led_green(on); else led_red(on);
+	} else if (!strcmp(c, "loop") && argc > 2) {
+		slots_loopback((int)strtoul(argv[1], 0, 0), argv[2][0] == '1');
+	} else if (!strcmp(c, "detach")) {
+		tud_disconnect();
+		log_printf("usb: soft-disconnected\n");
+	} else if (!strcmp(c, "attach")) {
+		tud_connect();
+		log_printf("usb: soft-connected\n");
 	} else {
-		uart_puts("? (help)\n");
+		con_out("? (help)\n");
+	}
+}
+
+static void feed(struct con *con, int c)
+{
+	cur = con;
+	if (c == '\r' || c == '\n') {
+		con_out("\n");
+		con->line[con->len] = 0;
+		run(con->line);
+		con->len = 0;
+		prompt();
+	} else if (c == 0x7f || c == 0x08) {
+		if (con->len) { con->len--; con_out("\b \b"); }
+	} else if (c == 0x03) {
+		con->len = 0; con_out("^C\n"); prompt();
+	} else if (c >= 0x20 && c < 0x7f && con->len < LINE_MAX - 1) {
+		con->line[con->len++] = (char)c;
+		char e[2] = { (char)c, 0 };
+		con_out(e);
 	}
 }
 
 void console_init(void)
 {
-	len = 0;
+	cur = &con_uart;
 	prompt();
 }
 
 void console_poll(void)
 {
 	int c;
-	while ((c = uart_getc()) >= 0) {
-		if (c == '\r' || c == '\n') {
-			uart_puts("\n");
-			line[len] = 0;
-			run(line);
-			len = 0;
-			prompt();
-		} else if (c == 0x7f || c == 0x08) {
-			if (len) { len--; uart_puts("\b \b"); }
-		} else if (c == 0x03) {
-			len = 0; uart_puts("^C\n"); prompt();
-		} else if (c >= 0x20 && c < 0x7f && len < LINE_MAX - 1) {
-			line[len++] = (char)c;
-			uart_putc((char)c);
-		}
+	while ((c = uart_getc()) >= 0)
+		feed(&con_uart, c);
+	while (tud_cdc_available()) {
+		uint8_t b[64];
+		uint32_t n = tud_cdc_read(b, sizeof b);
+		for (uint32_t i = 0; i < n; i++)
+			feed(&con_cdc, b[i]);
 	}
 }
