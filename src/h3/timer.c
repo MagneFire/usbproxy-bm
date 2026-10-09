@@ -25,11 +25,15 @@ void delay_us(uint32_t us)
 
 void delay_ms(uint32_t ms) { delay_us(ms * 1000); }
 
+void (*tick_hook)(uint32_t ticks);
+
 static void tick_irq(void)
 {
 	uint32_t tval = CNT_HZ / 1000;
 	__asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(tval));  /* CNTP_TVAL */
 	ticks++;
+	if (tick_hook)
+		tick_hook(ticks);
 }
 
 void timer_init(void)

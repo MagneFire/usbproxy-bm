@@ -135,6 +135,13 @@ static void run(char *s)
 	} else if (!strcmp(c, "led") && argc > 2) {
 		int on = argv[2][0] == '1';
 		if (argv[1][0] == 'g') led_green(on); else led_red(on);
+	} else if (!strcmp(c, "ehci")) {
+		extern void hcd_h3_dump(void (*)(const char *));
+		hcd_h3_dump(con_out);
+	} else if (!strcmp(c, "hostxfer") && argc > 1 && !strcmp(argv[1], "cnxn")) {
+		int r = host_test_cnxn(argc > 2 && argv[2][0] == 'm');
+		snprintf(buf, sizeof buf, "hostxfer cnxn: %s\n", r == 0 ? "submitted" : "not bound/failed");
+		con_out(buf);
 	} else if (!strcmp(c, "hostxfer") && argc > 2) {
 		/* hostxfer <in|out> <bytes> [slot]: one bulk transfer on the watch */
 		int slot = argc > 3 ? (int)strtoul(argv[3], 0, 0) : 0;

@@ -97,6 +97,7 @@ uint64_t cnt_now(void);         /* CNTPCT, 24 MHz since power-on */
 uint32_t time_ms(void);
 uint32_t time_us(void);
 uint32_t tick_count(void);
+extern void (*tick_hook)(uint32_t ticks);   /* called from the tick IRQ */
 void delay_us(uint32_t us);
 void delay_ms(uint32_t ms);
 

@@ -13,5 +13,6 @@ const char *host_link_speed(void);        /* "480", "12", "1.5", "none" */
 uint8_t host_daddr(void);
 uint32_t host_portsc(void);
 int host_test_xfer(int slot, bool in, uint32_t len);  /* 0 = submitted */
+int host_test_cnxn(int modern);
 void host_status_line(char *buf, unsigned n);
 #endif

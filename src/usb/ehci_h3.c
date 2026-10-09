@@ -789,7 +789,11 @@ void hcd_int_handler(uint8_t rhport, bool in_isr) {
   if (usb_int) {
     proccess_async_xfer_isr(list_get_async_head(rhport));
 
-    for ( uint32_t i = 1; i <= FRAMELIST_SIZE; i *= 2 ) {
+    /* H3: there are only four periodic heads (1/2/4/8 ms); upstream iterated
+     * up to FRAMELIST_SIZE, which with a standard 256-entry frame list indexes
+     * past period_head_arr[] and walks garbage forever (NXP's 8-entry list
+     * never reached it). */
+    for ( uint32_t i = 1; i <= 8; i *= 2 ) {
       process_period_xfer_isr(rhport, i);
     }
 
