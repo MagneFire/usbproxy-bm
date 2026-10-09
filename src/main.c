@@ -3,6 +3,7 @@
 #include "fw.h"
 #include "tusb.h"
 #include "usb/host_mgr.h"
+#include "bridge/bridge.h"
 
 uint32_t g_entry_ms;
 int g_up;
@@ -39,6 +40,7 @@ int main(void)
 
 	/* "Up" (GP1 cleared) happens in tud_mount_cb: the host configured the
 	 * gadget. Until then the SPL's guard still points at U-Boot proper. */
+	bridge_init();
 	const tusb_rhport_init_t rh_init = { .role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_HIGH };
 	tusb_init(0, &rh_init);
 	log_printf("usb: gadget %s initialised, waiting for the host\n", gadget_serial());

@@ -25,7 +25,7 @@ SRCS := src/start.S src/h3/cache.S \
         src/console/console.c src/console/log.c src/lib/libc.c src/lib/fmt.c \
         src/usb/dcd_h3_musb.c src/usb/usbphy.c src/usb/usb_descriptors.c \
         src/usb/gadget_slots.c src/usb/tusb_port.c \
-        src/usb/ehci_h3.c src/usb/hcd_h3_ehci.c src/usb/host_mgr.c \
+        src/usb/ehci_h3.c src/usb/hcd_h3_ehci.c src/usb/host_mgr.c src/bridge/bridge.c \
         $(TUSB)/host/usbh.c $(TUSB)/host/hub.c \
         $(TUSB)/tusb.c $(TUSB)/common/tusb_fifo.c $(TUSB)/device/usbd.c \
         $(TUSB)/class/cdc/cdc_device.c

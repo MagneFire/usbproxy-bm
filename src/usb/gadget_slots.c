@@ -3,6 +3,7 @@
 #include "tusb.h"
 #include "device/usbd_pvt.h"
 #include "gadget_slots.h"
+#include "bridge/bridge.h"
 
 struct slot {
 	uint8_t ep_in, ep_out;
@@ -26,6 +27,8 @@ static void slots_reset(uint8_t rhport)
 {
 	(void)rhport;
 	for (int i = 0; i < SLOT_COUNT; i++) {
+		if (slots[i].st.open)
+			bridge_gadget_gone(i);
 		slots[i].st.open = false;
 		slots[i].in_busy = false;
 	}
@@ -54,7 +57,10 @@ static uint16_t slots_open(uint8_t rhport, tusb_desc_interface_t const *itf, uin
 	}
 	s->st.open = true;
 	s->in_busy = false;
-	arm_out(s);
+	if (s->loopback)
+		arm_out(s);
+	else
+		bridge_gadget_ready(idx, s->ep_in, s->ep_out);
 	log_printf("slot %d open: in %02x out %02x\n", idx, s->ep_in, s->ep_out);
 	return need;
 }
@@ -76,6 +82,10 @@ static bool slots_xfer(uint8_t rhport, uint8_t ep_addr, xfer_result_t result, ui
 			s->st.out_pkts++;
 			s->st.out_bytes += xferred;
 			if (xferred == 0) s->st.out_zlp++;
+			if (!s->loopback) {
+				bridge_gadget_out_done(i, result == XFER_RESULT_SUCCESS ? xferred : 0);
+				return true;
+			}
 			if (result != XFER_RESULT_SUCCESS) { arm_out(s); return true; }
 			if (s->loopback) {
 				/* ping-pong: echo this packet (ZLPs too), re-arm OUT when the IN is done */
@@ -93,6 +103,8 @@ static bool slots_xfer(uint8_t rhport, uint8_t ep_addr, xfer_result_t result, ui
 			s->in_busy = false;
 			if (s->loopback)
 				arm_out(s);
+			else
+				bridge_gadget_in_done(i);
 			return true;
 		}
 	}
@@ -119,7 +131,7 @@ usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count)
 void slots_loopback(int slot, bool on)
 {
 	if (slot < 0 || slot >= SLOT_COUNT) return;
-	slots[slot].loopback = on;
+	slots[slot].loopback = on;	/* takes effect at the next configuration */
 }
 bool slots_loopback_on(int slot) { return slot >= 0 && slot < SLOT_COUNT && slots[slot].loopback; }
 const struct slot_stats *slots_stats(int slot) { return &slots[slot].st; }

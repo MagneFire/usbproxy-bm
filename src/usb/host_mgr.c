@@ -4,6 +4,7 @@
 #include "host/usbh_pvt.h"
 #include "host/hcd.h"
 #include "host_mgr.h"
+#include "bridge/bridge.h"
 
 extern volatile int ehci_h3_port_handed_over;
 uint32_t hcd_h3_portsc(void);
@@ -60,6 +61,11 @@ static uint16_t drv_open(uint8_t rhport, uint8_t daddr, tusb_desc_interface_t co
 static bool drv_set_config(uint8_t daddr, uint8_t itf_num)
 {
 	usbh_driver_set_config_complete(daddr, itf_num);
+	for (int i = 0; i < 2; i++)
+		if (slots[i].bound && slots[i].daddr == daddr && !slots[i].bridged) {
+			slots[i].bridged = true;
+			bridge_bind(i, daddr, slots[i].ep_in, slots[i].ep_out);
+		}
 	return true;
 }
 
@@ -74,6 +80,7 @@ static void drv_close(uint8_t daddr)
 	for (int i = 0; i < 2; i++)
 		if (slots[i].bound && slots[i].daddr == daddr) {
 			slots[i].bound = false;
+			if (slots[i].bridged) { slots[i].bridged = false; bridge_unbind(i); }
 			log_printf("host: slot %d unbound\n", i);
 		}
 }

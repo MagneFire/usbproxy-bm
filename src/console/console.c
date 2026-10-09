@@ -7,6 +7,7 @@
 #include "tusb.h"
 #include "usb/gadget_slots.h"
 #include "usb/host_mgr.h"
+#include "bridge/bridge.h"
 
 #define LINE_MAX 96
 
@@ -80,6 +81,8 @@ static void cmd_status(void)
 		con_out(buf);
 	}
 	host_status_line(buf, sizeof buf);
+	con_out(buf);
+	bridge_status(buf, sizeof buf);
 	con_out(buf);
 	snprintf(buf, sizeof buf, "fault=%s\n", log_fault() ? log_fault() : "none");
 	con_out(buf);

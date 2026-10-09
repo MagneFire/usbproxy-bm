@@ -6,7 +6,7 @@
  * host slots (adb = ff/42/01, fastboot = ff/42/03), the port policy (stay on
  * EHCI, retry a reset that did not reach high speed), and a test transfer
  * for the console. */
-struct hslot { uint8_t daddr, ep_in, ep_out; bool bound; uint32_t in_pkts, out_pkts, in_bytes, out_bytes; };
+struct hslot { uint8_t daddr, ep_in, ep_out; bool bound, bridged; uint32_t in_pkts, out_pkts, in_bytes, out_bytes; };
 void host_mgr_poll(void);
 const struct hslot *host_slot(int slot);
 const char *host_link_speed(void);        /* "480", "12", "1.5", "none" */
