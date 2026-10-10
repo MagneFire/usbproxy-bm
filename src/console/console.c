@@ -84,9 +84,10 @@ static void cmd_status(void)
 		(unsigned long)rtc_gp_read(0), (unsigned long)rtc_gp_read(1),
 		(unsigned long)rtc_gp_read(2), (unsigned long)rtc_gp_read(3), wdt_armed());
 	con_out(buf);
-	snprintf(buf, sizeof buf, "usb_mounted=%d\nusb_speed=%s\nusb_suspended=%d\ncdc_connected=%d\n",
+	extern uint32_t g_represents;
+	snprintf(buf, sizeof buf, "usb_mounted=%d\nusb_speed=%s\nusb_suspended=%d\nusb_represented=%lu\ncdc_connected=%d\n",
 		tud_mounted(), tud_speed_get() == TUSB_SPEED_HIGH ? "high" : "full",
-		tud_suspended(), tud_cdc_connected());
+		tud_suspended(), (unsigned long)g_represents, tud_cdc_connected());
 	con_out(buf);
 	{
 		extern void dcd_h3_dpb_stats(uint32_t *, uint32_t *, uint32_t *, uint32_t *);

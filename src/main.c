@@ -50,6 +50,36 @@ static bool usb_progress_ok(void)
 	return false;
 }
 
+/* The Mac can miss our disconnect: after quick power cycles it kept the old
+ * device object for a minute, retried transfers into the void (transaction
+ * errors every second) and never reset the new us; four cold boots sat
+ * unconfigured (2026-10-10 18:16). If the host has not configured us within
+ * 2 s of our last connect, drop the pull-up for 100 ms and present the
+ * gadget again, which the host sees as a fresh attach. Normal enumeration
+ * finishes in ~0.3 s. The console's `detach` suspends this. */
+bool g_manual_detach;
+uint32_t g_represents;
+static void gadget_present_check(void)
+{
+	static uint32_t since, dropped_at;
+	static bool dropped;
+	uint32_t now = time_ms();
+	if (!since) since = now;
+	if (g_manual_detach) { since = now; return; }
+	if (tud_mounted()) { since = now; return; }
+	if (dropped) {
+		if ((int32_t)(now - dropped_at) >= 100) { tud_connect(); dropped = false; since = now; }
+		return;
+	}
+	if ((int32_t)(now - since) >= 2000) {
+		g_represents++;
+		log_printf("usb: not configured %lu ms after connect; re-presenting the gadget (%lu)\n",
+			   (unsigned long)(now - since), (unsigned long)g_represents);
+		tud_disconnect();
+		dropped = true; dropped_at = now;
+	}
+}
+
 int main(void)
 {
 	g_entry_ms = time_ms();         /* CNTPCT runs from power-on */
@@ -99,6 +129,7 @@ int main(void)
 		console_poll();
 		if (usb_progress_ok())
 			wdt_feed();
+		gadget_present_check();
 		uint32_t t = tick_count();
 		if (t - last_blink >= 500) {
 			last_blink = t;
