@@ -51,6 +51,8 @@ boot0_reset:
         str     r1, [r0]
         bl      boot0_fel_entry
 1:
+        /* (ACTLR.SMP is the firmware's business: writing it here, with the
+         * BROM's I-cache and sunxi-fel's MMU live, wedged the FEL session.) */
         /* Known CPU state: clean+invalidate the D-cache (a FEL load may have
          * written us through sunxi-fel's MMU mapping), then MMU off, D-cache
          * off, alignment check off, I-cache + branch prediction on. */

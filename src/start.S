@@ -48,6 +48,14 @@ reset:
         bic     r0, r0, #(1 << 11) | (1 << 12) | (1 << 13) /* Z, I, V */
         mcr     p15, 0, r0, c1, c0, 0
         isb
+        /* Cortex-A7: ACTLR.SMP must be 1 before the caches/MMU go on (TRM;
+         * Linux's proc-v7 does the same); the BROM leaves it 0 and neither
+         * boot0 nor the H3 U-Boot SPL (no SPL_ARMV7_SET_CORTEX_SMPEN) sets
+         * it. Written here with everything off, then the invalidates. */
+        mrc     p15, 0, r0, c1, c0, 1
+        orr     r0, r0, #(1 << 6)
+        mcr     p15, 0, r0, c1, c0, 1
+        isb
         mov     r0, #0
         mcr     p15, 0, r0, c7, c5, 0           /* ICIALLU */
         mcr     p15, 0, r0, c7, c5, 6           /* BPIALL */
