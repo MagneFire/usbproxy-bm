@@ -47,6 +47,7 @@ static inline void clrbits(uintptr_t a, uint32_t m) { REG32(a) &= ~m; }
 #define RTC_MAGIC_DFU1  0x44465531u     /* "DFU1": SPL -> U-Boot proper (DFU) */
 #define RTC_MAGIC_FLCN  0x464c434eu     /* "FLCN": SPL's Falcon-in-progress guard */
 #define RTC_MAGIC_HNG1  0x484e4731u     /* "HNG1": hang before the GP1 clear next boot (test) */
+#define RTC_MAGIC_FEL1  0xb0010fe1u     /* SPL -> BROM FEL (p-boot / SUSE rbrom magic, U-Boot patch 0004) */
 
 #define H3_GICD         0x01c81000u
 #define H3_GICC         0x01c82000u
