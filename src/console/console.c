@@ -147,7 +147,7 @@ static void run(char *s)
 	char buf[48];
 	if (!strcmp(c, "help")) {
 		con_out("status log [bytes] reboot uboot hang hangnext panic mem <addr> [words] "
-			"uboot dfu fel reboot log [bytes|-f] gp <n> [val] led <g|r> <0|1> detach attach hostxfer <in|out> <n> [slot]\n");
+			"uboot dfu fel reboot log [bytes|-f] mem <hex> [n] memw <hex> <hex> gp <n> [val] led <g|r> <0|1> detach attach hostxfer <in|out> <n> [slot]\n");
 	} else if (!strcmp(c, "status")) {
 		cmd_status();
 	} else if (!strcmp(c, "log") && argc > 1 && !strcmp(argv[1], "-f")) {
@@ -199,6 +199,11 @@ static void run(char *s)
 				 (unsigned long)readl(a + 4 * i));
 			con_out(buf);
 		}
+	} else if (!strcmp(c, "memw") && argc > 2) {
+		uint32_t a = strtoul(argv[1], 0, 16) & ~3u;
+		writel(strtoul(argv[2], 0, 16), a);
+		snprintf(buf, sizeof buf, "%08lx: %08lx\n", (unsigned long)a, (unsigned long)readl(a));
+		con_out(buf);
 	} else if (!strcmp(c, "gp") && argc > 1) {
 		unsigned n = strtoul(argv[1], 0, 0) & 3;
 		if (argc > 2) rtc_gp_write(n, strtoul(argv[2], 0, 16));
