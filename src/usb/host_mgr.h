@@ -15,4 +15,6 @@ uint32_t host_portsc(void);
 int host_test_xfer(int slot, bool in, uint32_t len);  /* 0 = submitted */
 int host_test_cnxn(int modern);
 void host_status_line(char *buf, unsigned n);
+void host_cycle_start(unsigned n);
+void host_cycle_status(char *buf, unsigned n);
 #endif

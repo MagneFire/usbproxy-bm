@@ -111,6 +111,8 @@ static void cmd_status(void)
 	}
 	host_status_line(buf, sizeof buf);
 	con_out(buf);
+	host_cycle_status(buf, sizeof buf);
+	con_out(buf);
 	{
 		static char bbuf[640];		/* two cycle lines + two bridge lines */
 		bridge_status(bbuf, sizeof bbuf);
@@ -197,6 +199,8 @@ static void run(char *s)
 		con_out(buf);
 	} else if (!strcmp(c, "zero")) {
 		bridge_stats_reset();
+	} else if (!strcmp(c, "hostcycle")) {
+		host_cycle_start(argc > 1 ? (unsigned)strtoul(argv[1], 0, 0) : 1);
 	} else if (!strcmp(c, "cutfloor")) {
 		if (argc > 1) bridge_set_cut_floor(strtoul(argv[1], 0, 0));
 		snprintf(buf, sizeof buf, "cutfloor=%lu\n", (unsigned long)bridge_cut_floor());

@@ -21,6 +21,9 @@ static uint8_t cur_daddr;
 static uint32_t reclaim_at, reenum_at;
 static unsigned reclaims, hs_retries;
 static bool reenum_pending;
+/* software attach/detach cycles (console `hostcycle N`): unmount + re-enumerate */
+static unsigned cycles_left, cycle_mounts, cycle_fail;
+static uint32_t cycle_next_at, mounts;
 
 /* ---- class driver: the watch's bridge interfaces ---------------------- */
 static bool drv_init(void) { memset(slots, 0, sizeof slots); return true; }
@@ -112,6 +115,7 @@ void tuh_mount_cb(uint8_t daddr)
 	uint16_t vid = 0, pid = 0;
 	tuh_vid_pid_get(daddr, &vid, &pid);
 	cur_daddr = daddr;
+	mounts++;
 	tusb_speed_t sp = tuh_speed_get(daddr);
 	log_printf("host: device %u mounted, %04x:%04x, %s\n", daddr, vid, pid,
 		   sp == TUSB_SPEED_HIGH ? "high speed" : sp == TUSB_SPEED_FULL ? "FULL speed" : "low speed");
@@ -157,6 +161,24 @@ void host_mgr_poll(void)
 		hcd_event_device_remove(1, false);
 		hcd_event_device_attach(1, false);
 	}
+	if (cycles_left && !reenum_pending && (int32_t)(now - cycle_next_at) >= 0) {
+		if (cur_daddr) cycle_mounts++; else cycle_fail++;
+		cycles_left--;
+		cycle_next_at = now + 1500;
+		reenum_pending = true;
+		reenum_at = now;
+	}
+}
+
+void host_cycle_start(unsigned n)
+{
+	cycles_left = n; cycle_mounts = cycle_fail = 0;
+	cycle_next_at = time_ms();
+}
+void host_cycle_status(char *buf, unsigned n)
+{
+	snprintf(buf, n, "host_cycle=left:%u ok:%u fail:%u mounts_total:%lu\n", cycles_left, cycle_mounts, cycle_fail,
+		 (unsigned long)mounts);
 }
 
 const char *host_link_speed(void)

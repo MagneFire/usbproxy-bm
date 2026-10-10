@@ -638,6 +638,15 @@ void async_advance_isr(uint8_t rhport) {
   ehci_qhd_t *qhd_pool = ehci_data.qhd_pool;
   for (uint32_t i = 0; i < QHD_MAX; i++) {
     if (qhd_pool[i].removing) {
+      /* H3: a transfer still attached when the device went away never
+       * completes; upstream left its qTD marked used, leaking one per
+       * unplug until qtd_find_free() failed and every submit with it. */
+      ehci_qtd_t * volatile qtd = qhd_pool[i].attached_qtd;
+      if (qtd != NULL) {
+        qtd->used = 0;
+        qhd_pool[i].attached_qtd = NULL;
+        qhd_pool[i].attached_buffer = 0;
+      }
       qhd_pool[i].removing = 0;
       qhd_pool[i].used = 0;
     }
