@@ -49,15 +49,16 @@ static uint16_t drv_open(uint8_t rhport, uint8_t daddr, tusb_desc_interface_t co
 			return 0;
 		if (!tuh_edpt_open(daddr, ep))
 			return 0;
-		if (ep->bEndpointAddress & 0x80) in = ep->bEndpointAddress; else out = ep->bEndpointAddress;
+		if (ep->bEndpointAddress & 0x80) { in = ep->bEndpointAddress; s->in_mps = tu_edpt_packet_size(ep); }
+		else out = ep->bEndpointAddress;
 		p += sizeof(tusb_desc_endpoint_t);
 	}
 	if (!in || !out)
 		return 0;
 	s->daddr = daddr; s->ep_in = in; s->ep_out = out; s->bound = true;
 	s->in_pkts = s->out_pkts = s->in_bytes = s->out_bytes = 0;
-	log_printf("host: interface %u (proto %02x) -> slot %d, in %02x out %02x\n",
-		   itf->bInterfaceNumber, itf->bInterfaceProtocol, idx, in, out);
+	log_printf("host: interface %u (proto %02x) -> slot %d, in %02x (mps %u) out %02x\n",
+		   itf->bInterfaceNumber, itf->bInterfaceProtocol, idx, in, s->in_mps, out);
 	return need;
 }
 
@@ -67,7 +68,7 @@ static bool drv_set_config(uint8_t daddr, uint8_t itf_num)
 	for (int i = 0; i < 2; i++)
 		if (slots[i].bound && slots[i].daddr == daddr && !slots[i].bridged) {
 			slots[i].bridged = true;
-			bridge_bind(i, daddr, slots[i].ep_in, slots[i].ep_out);
+			bridge_bind(i, daddr, slots[i].ep_in, slots[i].ep_out, slots[i].in_mps);
 		}
 	return true;
 }

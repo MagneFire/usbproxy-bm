@@ -45,6 +45,7 @@ struct slot {
 	bool gadget_up, bound;
 	uint8_t g_in, g_out;		/* gadget endpoints */
 	uint8_t daddr, w_in, w_out;	/* watch */
+	uint16_t w_in_mps;		/* watch IN wMaxPacketSize */
 	struct dir h2w;			/* host (gadget OUT) -> watch (OUT) */
 	struct dir w2h;			/* watch (IN) -> host (gadget IN) */
 };
@@ -528,6 +529,15 @@ static void w2h_fill(struct slot *s)
 	uint32_t want = BRIDGE_BUF;
 	if (s == &slots[0])
 		want = d->pending_payload ? d->pending_payload : ADB_HDR_LEN;
+	else
+		/* fastboot: the host reads 64 bytes per response, so this slot
+		 * must never hand the Mac a piece bigger than one response. With
+		 * 4096-byte reads the cut-through once forwarded a 512-byte piece
+		 * of a narwhal `getvar all` and every fastboot read failed with
+		 * e00002e8 until the watch was reseated. One packet per read keeps
+		 * the slot off the cut-through path (expect <= PKT); a short reply
+		 * still completes the read at once. */
+		want = s->w_in_mps;
 	if (want > chunk) want = chunk;
 	d->expect = want;
 	dir_fill_armed(d, i);
@@ -739,10 +749,11 @@ static void adb_halt_in(struct slot *s, bool on)
 	log_printf("bridge: %s halt on EP%02x\n", on ? "set" : "clear", s->g_in);
 }
 
-void bridge_bind(int sl, uint8_t daddr, uint8_t ep_in, uint8_t ep_out)
+void bridge_bind(int sl, uint8_t daddr, uint8_t ep_in, uint8_t ep_out, uint16_t in_mps)
 {
 	struct slot *s = &slots[sl & 1];
 	s->daddr = daddr; s->w_in = ep_in; s->w_out = ep_out; s->bound = true;
+	s->w_in_mps = in_mps ? in_mps : 512;
 	s->w2h.pending_payload = 0;
 	if (s == &slots[0]) {
 		/* whatever the host still owes of the previous message belonged to
