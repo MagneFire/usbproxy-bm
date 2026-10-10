@@ -16,6 +16,8 @@ struct con {
 	void (*puts)(const char *);
 	char line[LINE_MAX];
 	int len;
+	bool follow;		/* `log -f`: stream new log bytes until any key */
+	uint32_t follow_total;
 };
 
 static bool cdc_write_all(const char *s, size_t n, uint32_t deadline)
@@ -50,8 +52,8 @@ static void cdc_puts(const char *s)
 	}
 }
 
-static struct con con_uart = { "uart", uart_puts, {0}, 0 };
-static struct con con_cdc = { "cdc", cdc_puts, {0}, 0 };
+static struct con con_uart = { "uart", uart_puts, {0}, 0, false, 0 };
+static struct con con_cdc = { "cdc", cdc_puts, {0}, 0, false, 0 };
 static struct con *cur = &con_uart;
 
 static void con_out(const char *s) { cur->puts(s); }
@@ -145,9 +147,16 @@ static void run(char *s)
 	char buf[48];
 	if (!strcmp(c, "help")) {
 		con_out("status log [bytes] reboot uboot hang hangnext panic mem <addr> [words] "
-			"gp <n> [val] led <g|r> <0|1> loop <slot> <0|1> detach attach hostxfer <in|out> <n> [slot]\n");
+			"log [bytes|-f] gp <n> [val] led <g|r> <0|1> loop <slot> <0|1> detach attach hostxfer <in|out> <n> [slot]\n");
 	} else if (!strcmp(c, "status")) {
 		cmd_status();
+	} else if (!strcmp(c, "log") && argc > 1 && !strcmp(argv[1], "-f")) {
+		if (cur == &con_uart) {
+			con_out("the UART already mirrors the log live\n");
+		} else {
+			cur->follow = true; cur->follow_total = log_total();
+			con_out("following the log; any key stops\n");
+		}
 	} else if (!strcmp(c, "log")) {
 		log_dump(argc > 1 ? strtoul(argv[1], 0, 0) : 4096, con_out);
 	} else if (!strcmp(c, "reboot")) {
@@ -249,12 +258,19 @@ static void run(char *s)
 static void feed(struct con *con, int c)
 {
 	cur = con;
+	if (con->follow) {		/* any key ends `log -f`; the key is eaten */
+		con->follow = false;
+		con->len = 0;
+		con_out("\n");
+		prompt();
+		return;
+	}
 	if (c == '\r' || c == '\n') {
 		con_out("\n");
 		con->line[con->len] = 0;
 		run(con->line);
 		con->len = 0;
-		prompt();
+		if (!con->follow) prompt();
 	} else if (c == 0x7f || c == 0x08) {
 		if (con->len) { con->len--; con_out("\b \b"); }
 	} else if (c == 0x03) {
@@ -272,9 +288,21 @@ void console_init(void)
 	prompt();
 }
 
+static void follow_pump(struct con *con)
+{
+	if (!con->follow) return;
+	uint32_t t = log_total();
+	if (t == con->follow_total) return;
+	uint32_t n = t - con->follow_total;
+	if (n > 512) n = 512;		/* catch up over several polls, keep the loop short */
+	log_dump_at(con->follow_total, n, con->puts);
+	con->follow_total += n;
+}
+
 void console_poll(void)
 {
 	int c;
+	follow_pump(&con_cdc);
 	while ((c = uart_getc()) >= 0)
 		feed(&con_uart, c);
 	while (tud_cdc_available()) {

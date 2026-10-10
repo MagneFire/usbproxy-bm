@@ -68,6 +68,26 @@ void log_printf(const char *fmt, ...)
 	log_write(buf, (size_t)n);
 }
 
+uint32_t log_total(void) { return H ? H->total : 0; }
+
+/* Bytes [from, from + n) of the ring's absolute byte count (what is still
+ * there of them), for `log -f`. */
+void log_dump_at(uint32_t from, size_t n, void (*out)(const char *))
+{
+	if (!H || !n) return;
+	uint32_t avail = H->total < H->size ? H->total : H->size;
+	if (H->total - from > avail) { n -= (H->total - from) - avail; from = H->total - avail; }
+	uint32_t pos = (H->head + H->size - (H->total - from)) % H->size;
+	char chunk[65];
+	while (n) {
+		size_t k = n < 64 ? n : 64;
+		for (size_t i = 0; i < k; i++) { chunk[i] = D[pos]; pos = (pos + 1) % H->size; }
+		chunk[k] = 0;
+		out(chunk);
+		n -= k;
+	}
+}
+
 void log_dump(size_t last, void (*out)(const char *))
 {
 	if (!H) return;
