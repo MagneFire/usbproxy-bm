@@ -1,7 +1,6 @@
 # usbproxy-bm: bare-metal usb-proxy firmware for the Orange Pi Zero (H2+/H3).
-# Loaded by the U-Boot SPL (Falcon payload at SD sector 0x18800, a Linux legacy
-# uImage) or by U-Boot proper (`loady 0x40008000` + `go 0x40008000`) or over
-# FEL. One binary, all three entries. See BARE-METAL.md in meta-usbproxy.
+# Loaded by boot0 (src/boot0: the uImage at SD sector 0x18800) or over FEL
+# (tools/flash.py). See README.md and BARE-METAL.md in meta-usbproxy.
 CROSS     ?= /opt/homebrew/bin/arm-none-eabi-
 CC        := $(CROSS)gcc
 OBJCOPY   := $(CROSS)objcopy
@@ -9,7 +8,7 @@ OBJDUMP   := $(CROSS)objdump
 SIZE      := $(CROSS)size
 MKIMAGE   ?= mkimage
 SUNXI_FEL ?= $(HOME)/.local/bin/sunxi-fel
-APPLIANCE ?= uv run $(HOME)/Downloads/meta-usbproxy/scripts/appliance.py
+FLASH     ?= uv run tools/flash.py     # FEL loader/flasher (needs sunxi-fel; uv fetches pyserial)
 SPL       ?= $(BUILD)/boot0.bin      # what `make fel` runs first to bring DRAM up (the U-Boot SPL still works here)
 
 BUILD   := build
@@ -118,19 +117,15 @@ $(BUILD)/felflash.bin: $(BUILD)/felflash.elf
 
 felflash: $(BUILD)/felflash.bin
 
-# Release onto the card over FEL (the firmware's `fel`, boot0 for DRAM, felflash
-# for the sectors, a watchdog reset, then the checks). `make flash BOOT0=1`
-# rewrites boot0 at sector 16 as well.
+# Release onto the card over FEL (tools/flash.py: the firmware's `fel`, boot0
+# for DRAM, felflash for the sectors, a watchdog reset, the console's status).
+# `make flash BOOT0=1` rewrites boot0 at sector 16 as well.
 flash: uimage boot0 felflash
-	$(APPLIANCE) bm flash $(BUILD)/fw.uimg $(if $(BOOT0),--boot0,)
+	$(FLASH) flash $(BUILD)/fw.uimg $(if $(BOOT0),--boot0,)
 
-# Dev loop: U-Boot prompt over the UART dongle, Y-modem into RAM, go.
-run-uboot: $(BUILD)/fw.bin
-	$(APPLIANCE) bm run $(BUILD)/fw.bin
-
-# Release onto the card's Falcon kernel sector, then reset and check.
-flash-uboot: uimage
-	$(APPLIANCE) bm flash $(BUILD)/fw.uimg
+# Dev loop: run a build from RAM over FEL, card untouched.
+run: $(BUILD)/fw.bin boot0
+	$(FLASH) run $(BUILD)/fw.bin
 
 # Card out of the board, in the Mac: dd straight at the Falcon sector.
 flash-sd: uimage
@@ -164,4 +159,4 @@ clean:
 	rm -rf $(BUILD)
 
 -include $(OBJS:.o=.d) $(BOOT0_OBJS:.o=.d) $(FELFLASH_OBJS:.o=.d)
-.PHONY: all size uimage boot0 felflash flash run-uboot flash-uboot flash-sd fel disasm clean
+.PHONY: all size uimage boot0 felflash flash run flash-sd fel fel-reset disasm clean

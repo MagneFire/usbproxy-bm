@@ -30,18 +30,19 @@ Nothing else on the card is read.
 
 ## Flashing
 
-Over the OTG cable, no serial adapter, with [sunxi-tools](https://github.com/linux-sunxi/sunxi-tools)
-and `scripts/appliance.py` from meta-usbproxy (`APPLIANCE=` in the Makefile):
+Over the OTG cable, no serial adapter; needs `sunxi-fel` from
+[sunxi-tools](https://github.com/linux-sunxi/sunxi-tools) (`SUNXI_FEL=` if not
+in `~/.local/bin`) and `uv` for `tools/flash.py`:
 
     make flash              # firmware only
     make flash BOOT0=1      # firmware, then boot0
+    make run                # a build from RAM, card untouched
 
 The firmware's `fel` console command puts the SoC into the BROM's FEL mode,
 `boot0.bin` brings DRAM up, `felflash.bin` writes and verifies the sectors,
 a watchdog reset boots the card, and the console is checked. A board that is
 already in FEL (empty card, bad image, firmware that died three boots in a
-row) is handled the same way. `make fel` runs a build from RAM over FEL
-without writing the card; `make fel-reset` leaves FEL.
+row) is handled the same way. `tools/flash.py fel` / `reset` enter and leave FEL by hand.
 
 A fresh card from a reader:
 
