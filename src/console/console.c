@@ -72,6 +72,14 @@ static void cmd_status(void)
 		tud_mounted(), tud_speed_get() == TUSB_SPEED_HIGH ? "high" : "full",
 		tud_suspended(), tud_cdc_connected());
 	con_out(buf);
+	{
+		extern void dcd_h3_dpb_stats(uint32_t *, uint32_t *, uint32_t *);
+		uint32_t w, e, x;
+		dcd_h3_dpb_stats(&w, &e, &x);
+		snprintf(buf, sizeof buf, "musb_dpb=tx_waits:%lu tx_early:%lu rx_extra:%lu\n",
+			 (unsigned long)w, (unsigned long)e, (unsigned long)x);
+		con_out(buf);
+	}
 	for (int i = 0; i < SLOT_COUNT; i++) {
 		const struct slot_stats *st = slots_stats(i);
 		snprintf(buf, sizeof buf, "slot%d=open:%d loop:%d out:%lu/%lu zlp:%lu in:%lu/%lu\n", i,
@@ -150,6 +158,10 @@ static void run(char *s)
 		int slot = argc > 3 ? (int)strtoul(argv[3], 0, 0) : 0;
 		int r = host_test_xfer(slot, argv[1][0] == 'i', strtoul(argv[2], 0, 0));
 		snprintf(buf, sizeof buf, "hostxfer: %s\n", r == 0 ? "submitted" : r == -1 ? "slot not bound" : "submit failed");
+		con_out(buf);
+	} else if (!strcmp(c, "chunk")) {
+		if (argc > 1) bridge_set_chunk(strtoul(argv[1], 0, 0));
+		snprintf(buf, sizeof buf, "chunk=%lu\n", (unsigned long)bridge_chunk());
 		con_out(buf);
 	} else if (!strcmp(c, "loop") && argc > 2) {
 		slots_loopback((int)strtoul(argv[1], 0, 0), argv[2][0] == '1');

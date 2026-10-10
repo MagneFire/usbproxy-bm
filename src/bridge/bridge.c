@@ -8,7 +8,12 @@
 enum { B_EMPTY = 0, B_FILLING, B_FULL, B_DRAINING };
 
 struct dir {
-	CFG_TUH_MEM_ALIGN uint8_t buf[BRIDGE_NBUF][BRIDGE_BUF];
+	/* Cached RAM, not the uncached .dma section: the musb side moves these
+	 * bytes by PIO one word at a time and an uncached word load is a DRAM
+	 * round trip (~21 us per 512 B packet measured). The EHCI side gets
+	 * clean/invalidate by address (hcd_dcache_* in hcd_h3_ehci.c); each
+	 * buffer is whole cache lines so the metadata below is never hit. */
+	__attribute__((aligned(64))) uint8_t buf[BRIDGE_NBUF][BRIDGE_BUF];
 	uint32_t len[BRIDGE_NBUF];
 	uint8_t state[BRIDGE_NBUF];
 	uint32_t seq[BRIDGE_NBUF];	/* fill order */
@@ -19,6 +24,8 @@ struct dir {
 	uint32_t hand_us, hand_n;	/* fill done -> drain submitted */
 	uint32_t drain_us, drain_n;	/* drain submitted -> drain done */
 	uint32_t t_drain_sub;
+	uint32_t t_fill_sub;		/* stamp: fill submitted */
+	uint32_t fill_us, fill_n;	/* fill submitted -> fill done */
 	uint32_t expect;		/* watch IN: bytes to read next (24 = adb header, else payload) */
 	uint32_t pending_payload;	/* parsed from the last header; 0 = next read is a header */
 };
@@ -31,7 +38,16 @@ struct slot {
 	struct dir w2h;			/* watch (IN) -> host (gadget IN) */
 };
 
-CFG_TUH_MEM_SECTION static struct slot slots[2];
+static struct slot slots[2];
+static uint32_t chunk = BRIDGE_BUF;
+
+void bridge_set_chunk(uint32_t bytes)
+{
+	if (bytes < 512) bytes = 512;
+	if (bytes > BRIDGE_BUF) bytes = BRIDGE_BUF;
+	chunk = bytes & ~511u;
+}
+uint32_t bridge_chunk(void) { return chunk; }
 
 static int oldest_full(struct dir *d)
 {
@@ -57,7 +73,8 @@ static void h2w_fill(struct slot *s)
 	int i = any_empty(d);
 	if (i < 0) return;
 	d->state[i] = B_FILLING; d->filling = i;
-	usbd_edpt_xfer(0, s->g_out, d->buf[i], BRIDGE_BUF, false);
+	d->t_fill_sub = time_us();
+	usbd_edpt_xfer(0, s->g_out, d->buf[i], (uint16_t)chunk, false);
 }
 
 static void w_out_cb(tuh_xfer_t *x);
@@ -86,6 +103,7 @@ void bridge_gadget_out_done(int sl, uint32_t len)
 	int i = d->filling;
 	if (i < 0) return;
 	d->filling = -1;
+	d->fill_us += time_us() - d->t_fill_sub; d->fill_n++;
 	d->msgs++; d->bytes += len;
 	if (!len) {
 		/* adb's libusb layer terminates every payload that is a multiple of
@@ -143,9 +161,10 @@ static void w2h_fill(struct slot *s)
 	uint32_t want = BRIDGE_BUF;
 	if (s == &slots[0])
 		want = d->pending_payload ? d->pending_payload : ADB_HDR_LEN;
-	if (want > BRIDGE_BUF) want = BRIDGE_BUF;
+	if (want > chunk) want = chunk;
 	d->expect = want;
 	d->state[i] = B_FILLING; d->filling = i;
+	d->t_fill_sub = time_us();
 	tuh_xfer_t x = { .daddr = s->daddr, .ep_addr = s->w_in, .buflen = (uint16_t)want, .buffer = d->buf[i],
 			 .complete_cb = w_in_cb, .user_data = (uintptr_t)(s - slots) };
 	if (!tuh_edpt_xfer(&x)) {
@@ -178,6 +197,7 @@ void bridge_watch_in_done(int sl, uint32_t len, int result)
 	int i = d->filling;
 	if (i < 0) return;
 	d->filling = -1;
+	d->fill_us += time_us() - d->t_fill_sub; d->fill_n++;
 	if (result != XFER_RESULT_SUCCESS) {
 		log_printf("bridge: slot %d watch IN result %d\n", sl, result);
 		d->state[i] = B_EMPTY;
@@ -186,11 +206,12 @@ void bridge_watch_in_done(int sl, uint32_t len, int result)
 	}
 	if (s == &slots[0]) {
 		if (d->pending_payload) {
-			d->pending_payload = len < d->pending_payload ? 0 : 0;	/* payload done (short = framing lost, resync at a header) */
+			/* a chunk of the payload; short = framing lost, resync at a header */
+			d->pending_payload = len < d->expect ? 0 : d->pending_payload - len;
 		} else if (len == ADB_HDR_LEN) {
 			uint32_t cmd, a0, a1, dl;
 			if (adb_parse_hdr(d->buf[i], &cmd, &a0, &a1, &dl))
-				d->pending_payload = dl > BRIDGE_BUF ? BRIDGE_BUF : dl;
+				d->pending_payload = dl > BRIDGE_BUF ? BRIDGE_BUF : dl;	/* legacy transport: maxdata 4096 */
 			else
 				d->pending_payload = 0;		/* not adb framing: keep reading headers */
 		} else {
@@ -254,9 +275,11 @@ void bridge_bind(int sl, uint8_t daddr, uint8_t ep_in, uint8_t ep_out)
 	struct slot *s = &slots[sl & 1];
 	s->daddr = daddr; s->w_in = ep_in; s->w_out = ep_out; s->bound = true;
 	s->w2h.pending_payload = 0;
+	uint32_t waiting = 0;
+	for (int i = 0; i < BRIDGE_NBUF; i++)
+		if (s->h2w.state[i] == B_FULL) waiting += s->h2w.len[i];
 	log_printf("bridge: slot %d bound to device %u (%02x/%02x), %lu bytes waiting for it\n", sl, daddr,
-		   ep_in, ep_out, (unsigned long)(s->h2w.state[0] == B_FULL ? s->h2w.len[0] : 0) +
-		   (s->h2w.state[1] == B_FULL ? s->h2w.len[1] : 0));
+		   ep_in, ep_out, (unsigned long)waiting);
 	h2w_drain(s);
 	w2h_fill(s);
 }
@@ -277,12 +300,14 @@ void bridge_status(char *buf, unsigned n)
 	for (int i = 0; i < 2 && k < (int)n; i++) {
 		struct slot *s = &slots[i];
 		k += snprintf(buf + k, n - (unsigned)k,
-			"bridge%d=up:%d bound:%d h2w:%lu/%lu zlp:%lu hand:%lu drain:%lu w2h:%lu/%lu zlp:%lu hand:%lu drain:%lu\n", i,
-			s->gadget_up, s->bound,
+			"bridge%d=up:%d bound:%d chunk:%lu h2w:%lu/%lu zlp:%lu fill:%lu hand:%lu drain:%lu w2h:%lu/%lu zlp:%lu fill:%lu hand:%lu drain:%lu\n", i,
+			s->gadget_up, s->bound, (unsigned long)chunk,
 			(unsigned long)s->h2w.msgs, (unsigned long)s->h2w.bytes, (unsigned long)s->h2w.zlps,
+			(unsigned long)(s->h2w.fill_n ? s->h2w.fill_us / s->h2w.fill_n : 0),
 			(unsigned long)(s->h2w.hand_n ? s->h2w.hand_us / s->h2w.hand_n : 0),
 			(unsigned long)(s->h2w.drain_n ? s->h2w.drain_us / s->h2w.drain_n : 0),
 			(unsigned long)s->w2h.msgs, (unsigned long)s->w2h.bytes, (unsigned long)s->w2h.zlps,
+			(unsigned long)(s->w2h.fill_n ? s->w2h.fill_us / s->w2h.fill_n : 0),
 			(unsigned long)(s->w2h.hand_n ? s->w2h.hand_us / s->w2h.hand_n : 0),
 			(unsigned long)(s->w2h.drain_n ? s->w2h.drain_us / s->w2h.drain_n : 0));
 	}

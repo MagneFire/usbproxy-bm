@@ -16,6 +16,51 @@
 #define EHCI_CONFIGFLAG (EHCI_OP + 0x40)
 #define EHCI_PORTSC     (EHCI_OP + 0x44)
 
+/* D-cache maintenance for buffers the EHCI reads/writes (ehci_h3.c calls
+ * these before an OUT, before and after an IN). Addresses inside the
+ * uncached .dma section (QH/qTD pool, enumeration buffers) need nothing.
+ * MVA ops reach the point of coherency, i.e. through the A7's L2. */
+extern char __dma_start[], __dma_end[];
+#define CACHE_LINE 64u
+
+static inline bool uncached(const void *addr)
+{
+	return (const char *)addr >= __dma_start && (const char *)addr < __dma_end;
+}
+
+bool hcd_dcache_clean(void const *addr, uint32_t size)
+{
+	if (!size || uncached(addr)) return true;
+	uintptr_t a = (uintptr_t)addr & ~(CACHE_LINE - 1), e = (uintptr_t)addr + size;
+	dmb();
+	for (; a < e; a += CACHE_LINE)
+		__asm__ volatile("mcr p15, 0, %0, c7, c10, 1" :: "r"(a));	/* DCCMVAC */
+	dsb();
+	return true;
+}
+
+bool hcd_dcache_invalidate(void const *addr, uint32_t size)
+{
+	if (!size || uncached(addr)) return true;
+	uintptr_t a = (uintptr_t)addr & ~(CACHE_LINE - 1), e = (uintptr_t)addr + size;
+	dmb();
+	for (; a < e; a += CACHE_LINE)
+		__asm__ volatile("mcr p15, 0, %0, c7, c6, 1" :: "r"(a));	/* DCIMVAC */
+	dsb();
+	return true;
+}
+
+bool hcd_dcache_clean_invalidate(void const *addr, uint32_t size)
+{
+	if (!size || uncached(addr)) return true;
+	uintptr_t a = (uintptr_t)addr & ~(CACHE_LINE - 1), e = (uintptr_t)addr + size;
+	dmb();
+	for (; a < e; a += CACHE_LINE)
+		__asm__ volatile("mcr p15, 0, %0, c7, c14, 1" :: "r"(a));	/* DCCIMVAC */
+	dsb();
+	return true;
+}
+
 static volatile uint32_t isr_count;
 static void ehci_irq(void)
 {

@@ -37,13 +37,24 @@ CFLAGS := -mcpu=cortex-a7 -marm -mfloat-abi=soft -ffreestanding -nostdlib \
           -Os -g -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
           -ffunction-sections -fdata-sections -fno-common \
           -Isrc -Isrc/usb -I$(TUSB) -I$(TUSB)/portable/ehci \
-          -DGITREV=\"$(GITREV)$(DIRTY)\" -DCFG_TUSB_MCU=OPT_MCU_NONE -DGADGET_SERIAL=\"$(GADGET_SERIAL)\"
+          -I$(BUILD) -DCFG_TUSB_MCU=OPT_MCU_NONE -DGADGET_SERIAL=\"$(GADGET_SERIAL)\"
 ASFLAGS := $(CFLAGS)
 LDFLAGS := -nostdlib -T ld/fw.ld -Wl,--gc-sections -Wl,--no-warn-rwx-segments -Wl,-Map=$(BUILD)/fw.map
 
 all: $(BUILD)/fw.bin size
 
-$(BUILD)/%.c.o: %.c
+# The build id lives in a generated header (rewritten only when it changes)
+# so the objects that print it are rebuilt when the tree moves. A -D on the
+# command line left stale "a849d72+" strings in a newer binary once.
+.PHONY: gitrev
+gitrev:
+	@mkdir -p $(BUILD)
+	@echo '#define GITREV "$(GITREV)$(DIRTY)"' > $(BUILD)/gitrev.h.tmp
+	@cmp -s $(BUILD)/gitrev.h.tmp $(BUILD)/gitrev.h || mv $(BUILD)/gitrev.h.tmp $(BUILD)/gitrev.h
+	@rm -f $(BUILD)/gitrev.h.tmp
+$(BUILD)/gitrev.h: gitrev
+
+$(BUILD)/%.c.o: %.c $(BUILD)/gitrev.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -c $< -o $@
 

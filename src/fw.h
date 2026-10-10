@@ -5,9 +5,7 @@
 #include <stdint.h>
 #include "h3/h3.h"
 
-#ifndef GITREV
-#define GITREV "nogit"
-#endif
+#include "gitrev.h"            /* generated: build/gitrev.h */
 #define IMAGE_BASE ((uintptr_t)_start)
 extern char _start[];
 

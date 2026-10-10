@@ -69,6 +69,8 @@ typedef struct
   pipe_state_t pipe0;
   pipe_state_t pipe[2][7];   /* pipe[direction][endpoint number - 1] */
   uint16_t     pipe_buf_is_fifo[2]; /* Bitmap. Each bit means whether 1:TU_FIFO or 0:POD. */
+  uint16_t     dpb_in;              /* H3: IN endpoints with double packet buffering */
+  uint32_t     dpb_tx_waits, dpb_tx_early, dpb_rx_extra; /* H3 DPB counters (console status) */
   uint16_t     in_zlp_pending;      /* H3: bitmap, a zero-length IN transfer still to be sent */
 } dcd_data_t;
 
@@ -577,6 +579,15 @@ static bool handle_xfer_in(uint_fast8_t ep_addr)
       __USBC_Dev_Tx_WriteDataComplete();
       return false;
     }
+    /* H3 DPB: the interrupt for the next-to-last packet arrives with the
+     * last one still in the other buffer; complete only once the FIFO is
+     * empty, so the transfer is really on the wire when the stack hears
+     * of it (another interrupt follows when that packet goes out). */
+    if ((_dcd.dpb_in & TU_BIT(epnum_minus1)) &&
+        USBC_REG_test_bit_w(USBC_BP_TXCSR_D_FIFO_NOT_EMPTY, USBC_REG_TXCSR(USBC0_BASE))) {
+      _dcd.dpb_tx_waits++;
+      return false;
+    }
     pipe->buf = NULL;
     return true;
   }
@@ -597,6 +608,13 @@ static bool handle_xfer_in(uint_fast8_t ep_addr)
   }
   __USBC_Dev_Tx_WriteDataComplete();
   // TU_LOG1(" TXCSRL%d = %x %d\r\n", epnum_minus1 + 1, regs->TXCSRL, rem - len);
+  /* H3 DPB: TXPKTRDY drops at once when the other buffer is free; fill it
+   * now instead of waiting for the interrupt that announces the same. */
+  if ((_dcd.dpb_in & TU_BIT(epnum_minus1)) && pipe->remaining &&
+      !USBC_REG_test_bit_w(USBC_BP_TXCSR_D_TX_READY, USBC_REG_TXCSR(USBC0_BASE))) {
+    _dcd.dpb_tx_early++;
+    return handle_xfer_in(ep_addr);
+  }
   return false;
 }
 
@@ -650,8 +668,19 @@ static bool edpt_n_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t *buffer, uint16
       _dcd.in_zlp_pending |= (uint16_t)TU_BIT(epnum_minus1);
     handle_xfer_in(ep_addr);
   } else {
-    if (__USBC_Dev_Rx_IsReadDataReady())
+    if (__USBC_Dev_Rx_IsReadDataReady()) {
+      /* Release the packet the previous transfer left as back-pressure. With
+       * DPB the next one may be waiting behind it: take it now, its interrupt
+       * came and went while nothing was armed. */
       __USBC_Dev_Rx_ReadDataComplete();
+      bool completed = false;
+      while (!completed && pipe->buf && __USBC_Dev_Rx_IsReadDataReady()) {
+        _dcd.dpb_rx_extra++;
+        completed = handle_xfer_out(ep_addr);
+      }
+      if (completed)
+        dcd_event_xfer_complete(rhport, ep_addr, pipe->length - pipe->remaining, XFER_RESULT_SUCCESS, false);
+    }
   }
   return true;
 }
@@ -827,7 +856,15 @@ static void process_edpt_n(uint8_t rhport, uint_fast8_t ep_addr)
 	    __USBC_Dev_Rx_ClearStall();
       return;
     }
+    /* H3 DPB: the other buffer may hold the next packet already and its
+     * interrupt was folded into this one; drain while RXPKTRDY re-asserts. */
     completed = handle_xfer_out(ep_addr);
+    /* Only while a transfer is armed: with none, RXPKTRDY stays set on
+     * purpose (back-pressure) and this loop would never end. */
+    while (!completed && _dcd.pipe[TUSB_DIR_OUT][epn - 1].buf && __USBC_Dev_Rx_IsReadDataReady()) {
+      _dcd.dpb_rx_extra++;
+      completed = handle_xfer_out(ep_addr);
+    }
   }
 
   if (completed) {
@@ -856,6 +893,11 @@ static void process_bus_reset(uint8_t rhport)
 /*------------------------------------------------------------------
  * Device API
  *------------------------------------------------------------------*/
+
+void dcd_h3_dpb_stats(uint32_t *tx_waits, uint32_t *tx_early, uint32_t *rx_extra)
+{
+  *tx_waits = _dcd.dpb_tx_waits; *tx_early = _dcd.dpb_tx_early; *rx_extra = _dcd.dpb_rx_extra;
+}
 
 static void usb_isr_handler(void) {
 	dcd_int_handler(0);
@@ -1016,18 +1058,33 @@ bool dcd_edpt_open(uint8_t rhport, tusb_desc_endpoint_t const * ep_desc)
     USBC_INT_EnableRxEp(epn);
   }
 
-  /* Setup FIFO */
-  int size_in_log2_minus3 = 28 - TU_MIN(28, __clz((uint32_t)mps));
-  if ((8u << size_in_log2_minus3) < mps) ++size_in_log2_minus3;
-  unsigned addr = find_free_memory(size_in_log2_minus3);
+  /* Setup FIFO. The adb pair (endpoint 1, the datapath) gets double packet
+   * buffering: the host can land/fetch the next packet while the CPU moves
+   * the previous one by PIO. 8 KiB of FIFO RAM: 64 (ep0) + 2*1024 (adb) +
+   * 3*2*512 (the rest) fits; doubling every endpoint would not. */
+  /* Static, size-aligned FIFO map instead of upstream's best-fit free list.
+   * Byte offsets; code = log2(size)-3; DPB doubles the allocation. */
+  static const struct { uint16_t addr; uint8_t code; uint8_t dpb; } fifo_map[TUP_DCD_ENDPOINT_MAX][2] = {
+    /* [ep][0=OUT/RX, 1=IN/TX] */
+    { {0, 3, 0},      {0, 3, 0}    },   /* ep0: fixed 64 */
+    { {2048, 6, 1},   {1024, 6, 1} },   /* ep1 adb: both double-buffered */
+    { {3584, 6, 0},   {3072, 6, 0} },   /* ep2 fastboot */
+    { {0, 0, 0},      {64, 3, 0}   },   /* ep3 CDC notify (IN only, 64) */
+    { {4096, 6, 0},   {512, 6, 0}  },   /* ep4 CDC data */
+  };
+  TU_ASSERT(mps <= (8u << fifo_map[epn][dir_in].code));
+  bool dpb = fifo_map[epn][dir_in].dpb;
+  unsigned addr = fifo_map[epn][dir_in].addr / 8;
   TU_ASSERT(addr);
+  uint8_t fifosz = (uint8_t)(fifo_map[epn][dir_in].code | (dpb ? USB_TXFIFOSZ_DPB : 0));
 
   if (dir_in) {
     USBC_Writew(addr, USBC_REG_TXFIFOAD(USBC0_BASE));
-    USBC_Writeb(size_in_log2_minus3, USBC_REG_TXFIFOSZ(USBC0_BASE));
+    USBC_Writeb(fifosz, USBC_REG_TXFIFOSZ(USBC0_BASE));
+    if (dpb) _dcd.dpb_in |= TU_BIT(epn - 1); else _dcd.dpb_in &= (uint16_t)~TU_BIT(epn - 1);
   } else {
     USBC_Writew(addr, USBC_REG_RXFIFOAD(USBC0_BASE));
-    USBC_Writeb(size_in_log2_minus3, USBC_REG_RXFIFOSZ(USBC0_BASE));
+    USBC_Writeb(fifosz, USBC_REG_RXFIFOSZ(USBC0_BASE));
   }
 
   musb_int_unmask();
