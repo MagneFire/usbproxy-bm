@@ -9,6 +9,7 @@ enum { B_EMPTY = 0, B_FILLING, B_FULL, B_DRAINING };
 enum { TAG_NONE = 0, TAG_PAY_LAST, TAG_OKAY };	/* cycle stamps, see cyc_* */
 #define A_WRTE 0x45545257u
 #define A_OKAY 0x59414b4fu
+#define A_CNXN 0x4e584e43u
 
 struct dir {
 	/* Cached RAM, not the uncached .dma section: the musb side moves these
@@ -184,6 +185,123 @@ static int cyc_status(const char *name, struct cyc *c, char *buf, unsigned n)
 			(unsigned long)(c->sum[5] / dn), (unsigned long)(c->depth_sum * 10 / dn), (unsigned long)c->dropped);
 }
 
+/* ---- adb slot: host->device stream framer, CNXN capture/replay, halt pulse
+ * (usb-proxy bridge.cpp, ported). adb writes each 24-byte header and each
+ * payload as its own USB transfer, so one gadget read never spans a message
+ * boundary: one decision per read. While no watch is bound the slot is an
+ * idle sink: every read is framed and dropped, except the host's CNXN,
+ * which is kept and replayed to the next device (only the host sends
+ * CNXN; the Mac's transport does not know the watch changed). */
+#define CNXN_MAX_PAYLOAD 1024
+#define ADB_KICK_PULSE_MS 300
+#define CNXN_REPLAY_GRACE_MS 500
+
+struct framer {
+	uint32_t payload_remaining;
+	bool dropping, unsynced;
+	bool cnxn_seen_since_bind, cnxn_pending;
+	uint8_t building[ADB_HDR_LEN + CNXN_MAX_PAYLOAD];
+	uint32_t building_len, building_left;	/* building_len: bytes stored; 0 = not building */
+	bool building_toolong;
+	uint8_t cnxn[ADB_HDR_LEN + CNXN_MAX_PAYLOAD];
+	uint32_t cnxn_len;
+	uint32_t captures, replays, dropped_msgs, resyncs;
+	uint32_t bind_ms;
+	bool replay_checked;			/* replay decision taken for this bind */
+	bool pulsing;				/* IN halt pulse running */
+	uint32_t pulse_until;
+	uint32_t pulses;
+};
+static struct framer fr;
+
+static void framer_building_clear(void)
+{
+	fr.building_len = 0; fr.building_left = 0; fr.building_toolong = false;
+}
+
+/* building[] holds a complete CNXN: record it unless its checksum fails
+ * (a stream fed from mid-message; adbd would drop the replay silently). */
+static void cnxn_complete(bool idle)
+{
+	if (fr.building_toolong) {
+		log_printf("bridge: host CNXN payload over %u bytes, not recorded\n", CNXN_MAX_PAYLOAD);
+		framer_building_clear();
+		return;
+	}
+	uint32_t plen = fr.building_len - ADB_HDR_LEN;
+	uint32_t want = adb_hdr_data_check(fr.building), have = adb_data_check(fr.building + ADB_HDR_LEN, plen);
+	if (want != have) {
+		log_printf("bridge: captured CNXN fails its checksum (%lu-byte banner); discarded\n", (unsigned long)plen);
+		framer_building_clear();
+		return;
+	}
+	memcpy(fr.cnxn, fr.building, fr.building_len);
+	fr.cnxn_len = fr.building_len;
+	framer_building_clear();
+	fr.cnxn_pending = idle;
+	fr.captures++;
+	if (idle)
+		log_printf("bridge: idle adb slot: host CNXN captured (%lu-byte banner), held for the next device\n",
+			   (unsigned long)plen);
+}
+
+/* One gadget OUT read of the adb slot. Returns whether to forward it. */
+static bool framer_feed(const uint8_t *data, uint32_t len, bool idle)
+{
+	uint32_t cmd, a0, a1, plen;
+	if (len == 0) return !idle;
+	/* Idle slot only: a header where payload was due means the host
+	 * re-opened its transport mid-message (adb's rescan landed inside the
+	 * halt pulse). Drop the partial message and start over at this header. */
+	if (idle && fr.payload_remaining > 0 && len == ADB_HDR_LEN && adb_parse_hdr(data, &cmd, &a0, &a1, &plen)) {
+		log_printf("bridge: idle adb slot: header where %lu payload bytes were due; dropping the partial message\n",
+			   (unsigned long)fr.payload_remaining);
+		fr.payload_remaining = 0;
+		framer_building_clear();
+		fr.dropping = false;
+	}
+	if (fr.payload_remaining > 0) {
+		uint32_t take = len < fr.payload_remaining ? len : fr.payload_remaining;
+		fr.payload_remaining -= take;
+		if (fr.building_left > 0) {
+			uint32_t room = sizeof fr.building - fr.building_len;
+			if (take > room) { fr.building_toolong = true; }
+			else { memcpy(fr.building + fr.building_len, data, take); fr.building_len += take; }
+			fr.building_left -= take < fr.building_left ? take : fr.building_left;
+			if (fr.building_left == 0 && !fr.dropping)
+				cnxn_complete(idle);
+		}
+		bool forward = !fr.dropping;
+		if (fr.payload_remaining == 0 && fr.dropping) {
+			fr.dropping = false;
+			log_printf("bridge: host stream back at a message boundary\n");
+		}
+		return forward && !idle;
+	}
+	/* a header is due */
+	if (len != ADB_HDR_LEN || !adb_parse_hdr(data, &cmd, &a0, &a1, &plen)) {
+		if (!fr.unsynced) {
+			log_printf("bridge: %lu host bytes where a header was due; dropping until one arrives\n", (unsigned long)len);
+			fr.resyncs++;
+		}
+		fr.unsynced = true;
+		fr.dropped_msgs++;
+		return false;
+	}
+	if (fr.unsynced) {
+		log_printf("bridge: host stream re-synced\n");
+		fr.unsynced = false;
+	}
+	fr.payload_remaining = plen;
+	if (cmd == A_CNXN) {
+		fr.cnxn_seen_since_bind = !idle;
+		memcpy(fr.building, data, ADB_HDR_LEN);
+		fr.building_len = ADB_HDR_LEN; fr.building_left = plen; fr.building_toolong = false;
+		if (plen == 0) cnxn_complete(idle);
+	}
+	if (idle) fr.dropped_msgs++;
+	return !idle;
+}
 static int oldest_full(struct dir *d)
 {
 	int best = -1;
@@ -284,6 +402,7 @@ static void h2w_drain_partial(struct slot *s)
 	struct dir *d = &s->h2w;
 	if (!(cut_mask & 1)) return;
 	if (!s->bound || d->draining >= 0 || d->filling < 0) return;
+	if (s == &slots[0] && (fr.payload_remaining == 0 || fr.dropping || fr.unsynced)) return;
 	if (oldest_full(d) >= 0) return;		/* order: complete buffers first */
 	bool dma;
 	extern uint32_t dcd_h3_out_landed(uint8_t, bool *);
@@ -328,6 +447,14 @@ void bridge_gadget_out_done(int sl, uint32_t len)
 			h2w_fill(s);
 			return;
 		}
+	}
+	if (s == &slots[0] && !framer_feed(d->buf[i], len, !s->bound)) {
+		/* idle sink, a dropped tail, or bytes where a header was due */
+		d->filling = -1;
+		d->fill_us += time_us() - d->t_fill_sub; d->fill_n++;
+		d->state[i] = B_EMPTY;
+		h2w_fill(s);
+		return;
 	}
 	i = dir_fill_complete(d, len);
 	d->t_fill_done = time_us();
@@ -510,9 +637,13 @@ void bridge_gadget_in_done(int sl)
 }
 
 /* Main loop: forward what has landed so far (both directions, adb slot). */
+bool bridge_adb_pulsing(void) { return fr.pulsing; }
+
+static void adb_slot_poll(struct slot *s);
 void bridge_poll(void)
 {
 	struct slot *s = &slots[0];
+	adb_slot_poll(s);
 	if (!s->bound) return;
 	h2w_drain_partial(s);
 	w2h_drain_partial(s);
@@ -539,6 +670,7 @@ void bridge_gadget_ready(int sl, uint8_t ep_in, uint8_t ep_out)
 	/* Anything the gadget had in flight is gone with the (re)configuration. */
 	if (s->h2w.filling >= 0) { s->h2w.state[s->h2w.filling] = B_EMPTY; s->h2w.filling = -1; }
 	if (s->w2h.draining >= 0) { s->w2h.state[s->w2h.draining] = B_EMPTY; s->w2h.draining = -1; s->w2h.partial = false; }
+	if (s == &slots[0]) { fr.pulsing = false; fr.payload_remaining = 0; fr.unsynced = false; fr.dropping = false; framer_building_clear(); }
 	h2w_fill(s);
 	w2h_drain(s);
 }
@@ -547,8 +679,19 @@ void bridge_gadget_gone(int sl)
 {
 	struct slot *s = &slots[sl & 1];
 	s->gadget_up = false;
+	if (s == &slots[0]) fr.pulsing = false;
 	if (s->h2w.filling >= 0) { s->h2w.state[s->h2w.filling] = B_EMPTY; s->h2w.filling = -1; }
 	if (s->w2h.draining >= 0) { s->w2h.state[s->w2h.draining] = B_EMPTY; s->w2h.draining = -1; s->w2h.partial = false; }
+}
+
+static void adb_halt_in(struct slot *s, bool on)
+{
+	if (!s->gadget_up) return;
+	bool is = usbd_edpt_stalled(0, s->g_in);
+	if (on && !is) usbd_edpt_stall(0, s->g_in);
+	else if (!on && is) usbd_edpt_clear_stall(0, s->g_in);	/* only clear what is halted: musb CLRDATATOG */
+	else return;
+	log_printf("bridge: %s halt on EP%02x\n", on ? "set" : "clear", s->g_in);
 }
 
 void bridge_bind(int sl, uint8_t daddr, uint8_t ep_in, uint8_t ep_out)
@@ -556,6 +699,21 @@ void bridge_bind(int sl, uint8_t daddr, uint8_t ep_in, uint8_t ep_out)
 	struct slot *s = &slots[sl & 1];
 	s->daddr = daddr; s->w_in = ep_in; s->w_out = ep_out; s->bound = true;
 	s->w2h.pending_payload = 0;
+	if (s == &slots[0]) {
+		/* whatever the host still owes of the previous message belonged to
+		 * the device that is gone: drop that tail, resume at the boundary */
+		if (fr.payload_remaining > 0) {
+			log_printf("bridge: host mid-message (%lu bytes to go) from the previous device; dropping that tail\n",
+				   (unsigned long)fr.payload_remaining);
+			fr.dropping = true;
+		}
+		fr.cnxn_seen_since_bind = false;
+		framer_building_clear();
+		fr.bind_ms = time_ms();
+		fr.replay_checked = false;
+		fr.pulsing = false;
+		adb_halt_in(s, false);		/* idempotent: a host SET_FEATURE or a pulse cut short */
+	}
 	uint32_t waiting = 0;
 	for (int i = 0; i < BRIDGE_NBUF; i++)
 		if (s->h2w.state[i] == B_FULL) waiting += s->h2w.len[i];
@@ -565,6 +723,56 @@ void bridge_bind(int sl, uint8_t daddr, uint8_t ep_in, uint8_t ep_out)
 	w2h_fill(s);
 }
 
+/* Replay the host's last CNXN to the newly bound device as two messages
+ * (header, payload), the way adb sends them. */
+static void replay_cnxn(struct slot *s)
+{
+	struct dir *d = &s->h2w;
+	int hi = -1, pi = -1;
+	for (int i = 0; i < BRIDGE_NBUF; i++)
+		if (d->state[i] == B_EMPTY) { if (hi < 0) hi = i; else if (pi < 0) pi = i; }
+	uint32_t plen = fr.cnxn_len - ADB_HDR_LEN;
+	if (hi < 0 || (plen && pi < 0)) return;		/* try again next poll */
+	log_printf("bridge: %s; replaying the host's last CNXN (%lu-byte banner) to the device\n",
+		   fr.cnxn_pending ? "host CNXN captured while idle" : "host sent no CNXN since the bind",
+		   (unsigned long)plen);
+	memcpy(d->buf[hi], fr.cnxn, ADB_HDR_LEN);
+	d->len[hi] = ADB_HDR_LEN; d->off[hi] = 0; d->tag[hi] = TAG_NONE; d->seq[hi] = d->next_seq++; d->state[hi] = B_FULL;
+	if (plen) {
+		memcpy(d->buf[pi], fr.cnxn + ADB_HDR_LEN, plen);
+		d->len[pi] = plen; d->off[pi] = 0; d->tag[pi] = TAG_NONE; d->seq[pi] = d->next_seq++; d->state[pi] = B_FULL;
+	}
+	d->t_fill_done = time_us();
+	fr.cnxn_pending = false;
+	fr.cnxn_seen_since_bind = true;
+	fr.replays++;
+	h2w_drain(s);
+}
+
+static void adb_slot_poll(struct slot *s)
+{
+	uint32_t now = time_ms();
+	if (fr.pulsing && (int32_t)(now - fr.pulse_until) >= 0) {
+		fr.pulsing = false;
+		if (!s->bound) adb_halt_in(s, false);	/* back to NAK: the re-opened transport holds */
+	}
+	if (s->bound && s->gadget_up && !fr.replay_checked && !fr.cnxn_seen_since_bind) {
+		/* a restarted host transport sends its CNXN within milliseconds of
+		 * the bind: give it the grace, then replay the previous one. One the
+		 * idle sink captured is replayed at once: the host is waiting on it. */
+		if (fr.cnxn_pending || (int32_t)(now - (fr.bind_ms + CNXN_REPLAY_GRACE_MS)) >= 0) {
+			if (fr.payload_remaining > 0 || fr.unsynced) return;	/* not at a boundary yet */
+			fr.replay_checked = true;
+			if (fr.cnxn_len < ADB_HDR_LEN) {
+				log_printf("bridge: host sent no CNXN since the bind and none is on record; adb connects when the host re-opens\n");
+				return;
+			}
+			replay_cnxn(s);
+			if (!fr.cnxn_seen_since_bind) fr.replay_checked = false;	/* no free buffer yet */
+		}
+	}
+}
+
 void bridge_unbind(int sl)
 {
 	struct slot *s = &slots[sl & 1];
@@ -572,7 +780,23 @@ void bridge_unbind(int sl)
 	/* The host stack cancels the device's transfers at close; drop ours. */
 	if (s->h2w.draining >= 0) { s->h2w.state[s->h2w.draining] = B_EMPTY; s->h2w.draining = -1; s->h2w.partial = false; }
 	if (s->w2h.filling >= 0) { s->w2h.state[s->w2h.filling] = B_EMPTY; s->w2h.filling = -1; }
-	log_printf("bridge: slot %d unbound\n", sl);
+	/* adb: FULL buffers waiting to go to the watch belonged to it */
+	if (s == &slots[0])
+		for (int i = 0; i < BRIDGE_NBUF; i++)
+			if (s->h2w.state[i] == B_FULL) s->h2w.state[i] = B_EMPTY;
+	/* adb: pulse a halt on IN so the host's pending read fails at once and
+	 * adb drops its transport (only the host sends CNXN; a stale transport
+	 * would never see the next device), then back to NAK. IN only: halting
+	 * OUT would reset the gadget's OUT toggle (musb CLRDATATOG) while the
+	 * Mac keeps its own. fastboot: never halted, for the same toggle reason. */
+	bool pulse = s == &slots[0] && s->gadget_up;
+	if (pulse) {
+		adb_halt_in(s, true);
+		fr.pulsing = true; fr.pulse_until = time_ms() + ADB_KICK_PULSE_MS; fr.pulses++;
+		if (s->w2h.draining >= 0) { s->w2h.state[s->w2h.draining] = B_EMPTY; s->w2h.draining = -1; s->w2h.partial = false; }
+	}
+	log_printf("bridge: slot %d unbound%s\n", sl, pulse ? " (halt pulse to kick adb, then idle NAK)" : " (idle NAK)");
+	h2w_fill(s);	/* the idle sink keeps reading */
 }
 
 void bridge_stats_reset(void)
@@ -599,6 +823,11 @@ bool bridge_host_pending(void)
 void bridge_status(char *buf, unsigned n)
 {
 	int k = 0;
+	k += snprintf(buf + k, n - (unsigned)k,
+		"framer=rem:%lu drop:%d unsync:%d cnxn:%lu pending:%d seen:%d captures:%lu replays:%lu dropped:%lu resyncs:%lu pulses:%lu halted:%d\n",
+		(unsigned long)fr.payload_remaining, fr.dropping, fr.unsynced, (unsigned long)fr.cnxn_len, fr.cnxn_pending,
+		fr.cnxn_seen_since_bind, (unsigned long)fr.captures, (unsigned long)fr.replays, (unsigned long)fr.dropped_msgs,
+		(unsigned long)fr.resyncs, (unsigned long)fr.pulses, slots[0].gadget_up && usbd_edpt_stalled(0, slots[0].g_in));
 	k += cyc_status("push", &cyc_push, buf + k, n - (unsigned)k);
 	k += cyc_status("pull", &cyc_pull, buf + k, n - (unsigned)k);
 	for (int i = 0; i < 2 && k < (int)n; i++) {

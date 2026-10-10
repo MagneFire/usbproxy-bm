@@ -67,8 +67,22 @@ static uint16_t slots_open(uint8_t rhport, tusb_desc_interface_t const *itf, uin
 
 static bool slots_control(uint8_t rhport, uint8_t stage, tusb_control_request_t const *req)
 {
-	(void)rhport; (void)stage; (void)req;
-	return false;	/* no class requests on the bridge interfaces */
+	/* Standard endpoint requests are forwarded here after usbd acted on them.
+	 * During the adb unbind halt pulse the host's CLEAR_FEATURE(HALT) must
+	 * not end the pulse: macOS adb clears the stall once and retries the
+	 * read; only a second STALL makes it drop its transport, which is the
+	 * point of the pulse (then it re-opens and sends a CNXN the idle sink
+	 * captures). Re-stall until the pulse ends. */
+	if (stage == CONTROL_STAGE_SETUP && req->bmRequestType_bit.recipient == TUSB_REQ_RCPT_ENDPOINT &&
+	    req->bmRequestType_bit.type == TUSB_REQ_TYPE_STANDARD && req->bRequest == TUSB_REQ_CLEAR_FEATURE &&
+	    req->wValue == TUSB_REQ_FEATURE_EDPT_HALT) {
+		uint8_t ep = (uint8_t)req->wIndex;
+		if (ep == slots[0].ep_in && bridge_adb_pulsing()) {
+			usbd_edpt_stall(rhport, ep);
+			log_printf("slots: host cleared halt on EP%02x mid-pulse; re-stalled\n", ep);
+		}
+	}
+	return true;
 }
 
 static bool slots_xfer(uint8_t rhport, uint8_t ep_addr, xfer_result_t result, uint32_t xferred)

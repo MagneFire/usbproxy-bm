@@ -114,7 +114,7 @@ static void cmd_status(void)
 	host_cycle_status(buf, sizeof buf);
 	con_out(buf);
 	{
-		static char bbuf[640];		/* two cycle lines + two bridge lines */
+		static char bbuf[900];		/* framer + two cycle lines + two bridge lines */
 		bridge_status(bbuf, sizeof bbuf);
 		con_out(bbuf);
 	}
