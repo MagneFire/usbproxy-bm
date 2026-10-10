@@ -147,7 +147,7 @@ static void run(char *s)
 	char buf[48];
 	if (!strcmp(c, "help")) {
 		con_out("status log [bytes] reboot uboot hang hangnext panic mem <addr> [words] "
-			"uboot dfu fel reboot log [bytes|-f] mem <hex> [n] memw <hex> <hex> gp <n> [val] led <g|r> <0|1> detach attach hostxfer <in|out> <n> [slot]\n");
+			"fel reboot log [bytes|-f] mem <hex> [n] memw <hex> <hex> gp <n> [val] led <g|r> <0|1> detach attach hostxfer <in|out> <n> [slot]\n");
 	} else if (!strcmp(c, "status")) {
 		cmd_status();
 	} else if (!strcmp(c, "log") && argc > 1 && !strcmp(argv[1], "-f")) {
@@ -162,22 +162,12 @@ static void run(char *s)
 	} else if (!strcmp(c, "reboot")) {
 		log_printf("reboot requested\n");
 		wdt_reset_now();
-	} else if (!strcmp(c, "uboot")) {
-		/* Make the SPL take the "last Falcon boot died" path: U-Boot proper. */
-		log_printf("uboot requested: GP1=FLCN + reset\n");
-		rtc_gp_write(1, RTC_MAGIC_FLCN);
-		wdt_reset_now();
 	} else if (!strcmp(c, "fel")) {
-		/* SPL patch 0004: this word in GP1 at reset sends the SPL into the
-		 * BROM's FEL routine: sunxi-fel on the OTG port, card untouched. */
+		/* This word in GP1 at reset sends boot0 (and the old U-Boot SPL,
+		 * patch 0004) into the BROM's FEL routine: sunxi-fel on the OTG
+		 * port, card untouched. `appliance.py bm flash/run` start here. */
 		log_printf("fel requested: GP1=FEL1 + reset\n");
 		rtc_gp_write(1, RTC_MAGIC_FEL1);
-		wdt_reset_now();
-	} else if (!strcmp(c, "dfu")) {
-		/* DFU1 in GP0: the SPL takes the U-Boot path and boot.scr starts
-		 * dfu-util mode, as Linux's usb-flash-mode does. */
-		log_printf("dfu requested: GP0=DFU1 + reset\n");
-		rtc_gp_write(0, RTC_MAGIC_DFU1);
 		wdt_reset_now();
 	} else if (!strcmp(c, "hang")) {
 		log_printf("hang: not feeding the watchdog\n");

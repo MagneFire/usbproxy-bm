@@ -42,7 +42,7 @@ CFLAGS += $(EXTRA_CFLAGS)
 ASFLAGS := $(CFLAGS)
 LDFLAGS := -nostdlib -T ld/fw.ld -Wl,--gc-sections -Wl,--no-warn-rwx-segments -Wl,-Map=$(BUILD)/fw.map
 
-all: $(BUILD)/fw.bin size
+all: $(BUILD)/fw.bin size boot0 felflash
 
 # The build id lives in a generated header, rewritten at parse time only when
 # it changes, so the objects that print it rebuild when the tree moves (a -D
@@ -102,6 +102,28 @@ $(BUILD)/boot0.bin: $(BUILD)/boot0.elf tools/egon.py
 
 boot0: $(BUILD)/boot0.bin
 
+# felflash: writes a card region over FEL (after `sunxi-fel spl boot0.bin`
+# brought DRAM up); scripts/appliance.py bm flash drives it. Same objects as
+# boot0, linked for DRAM.
+FELFLASH_SRCS := src/felflash/start.S src/felflash/main.c src/h3/mmc.c src/h3/uart.c \
+                 src/h3/ccu.c src/h3/timer.c src/lib/libc.c src/lib/fmt.c src/lib/crc32.c
+FELFLASH_OBJS := $(patsubst %,$(BUILD)/boot0/%.o,$(FELFLASH_SRCS))
+
+$(BUILD)/felflash.elf: $(FELFLASH_OBJS) ld/felflash.ld
+	$(CC) $(CFLAGS) -nostdlib -T ld/felflash.ld -Wl,--gc-sections -Wl,--no-warn-rwx-segments -Wl,-Map=$(BUILD)/felflash.map -o $@ $(FELFLASH_OBJS) -lgcc
+
+$(BUILD)/felflash.bin: $(BUILD)/felflash.elf
+	$(OBJCOPY) -O binary $< $@
+	@$(SIZE) $<
+
+felflash: $(BUILD)/felflash.bin
+
+# Release onto the card over FEL (the firmware's `fel`, boot0 for DRAM, felflash
+# for the sectors, a watchdog reset, then the checks). `make flash BOOT0=1`
+# rewrites boot0 at sector 16 as well.
+flash: uimage boot0 felflash
+	$(APPLIANCE) bm flash $(BUILD)/fw.uimg $(if $(BOOT0),--boot0,)
+
 # Dev loop: U-Boot prompt over the UART dongle, Y-modem into RAM, go.
 run-uboot: $(BUILD)/fw.bin
 	$(APPLIANCE) bm run $(BUILD)/fw.bin
@@ -141,5 +163,5 @@ disasm: $(BUILD)/fw.elf
 clean:
 	rm -rf $(BUILD)
 
--include $(OBJS:.o=.d) $(BOOT0_OBJS:.o=.d)
-.PHONY: all size uimage boot0 run-uboot flash-uboot flash-sd fel disasm clean
+-include $(OBJS:.o=.d) $(BOOT0_OBJS:.o=.d) $(FELFLASH_OBJS:.o=.d)
+.PHONY: all size uimage boot0 felflash flash run-uboot flash-uboot flash-sd fel disasm clean
