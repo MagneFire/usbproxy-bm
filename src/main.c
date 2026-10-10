@@ -28,6 +28,18 @@ static bool usb_progress_ok(void)
 	bool musb_ok = !tud_mounted() || tud_suspended() || fr != last_frnum;
 	bool ehci_ok = fi != last_frindex;
 	last_frnum = fr; last_frindex = fi;
+	/* No SOFs from the Mac is not a fault: when the Mac sleeps the musb
+	 * reports SUSPEND and, 2 ms later, a RESUME that never brings SOFs, so
+	 * tud_suspended() is false while the bus sits idle. Resetting the board
+	 * there wakes the Mac over USB and the two then loop (observed: 57 s
+	 * period). The gadget bus state is logged on change and only the EHCI
+	 * (our own host controller) can fail the gate. */
+	static bool sofs_idle;
+	if (musb_ok == sofs_idle) {
+		sofs_idle = !musb_ok;
+		log_printf("usb: gadget bus %s\n", sofs_idle ? "idle (no SOFs; host asleep or gone)" : "active again");
+	}
+	musb_ok = true;
 	if (!bound || (musb_ok && ehci_ok)) { stuck_since = 0; return true; }
 	if (!stuck_since) stuck_since = now;
 	if ((int32_t)(now - stuck_since) < 2000) return true;

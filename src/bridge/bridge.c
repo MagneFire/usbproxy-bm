@@ -36,6 +36,7 @@ struct dir {
 	uint32_t t_drain_sub;
 	uint32_t t_fill_sub;		/* stamp: fill submitted */
 	uint32_t fill_us, fill_n;	/* fill submitted -> fill done */
+	uint32_t verified;		/* watch IN cut-through: bytes of the filling buffer seen landed (canary gone) */
 	uint32_t expect;		/* watch IN: bytes to read next (24 = adb header, else payload) */
 	uint32_t pending_payload;	/* parsed from the last header; 0 = next read is a header */
 };
@@ -63,6 +64,24 @@ void bridge_set_cut_floor(uint32_t b) { cut_floor = (b < 512 ? 512 : b > BRIDGE_
 uint32_t bridge_cut_floor(void) { return cut_floor; }
 static uint32_t cut_mask = 2;	/* watch->Mac on; Mac->watch (2 KiB floor) measured no gain: the watch's OKAY time does not follow our delivery */	/* watch->Mac on; Mac->watch off: per-packet OUT transfers made the watch respond ~200 us later */		/* bit0: Mac->watch cut-through, bit1: watch->Mac (console `cut`) */
 void bridge_set_cut(uint32_t m) { cut_mask = m & 3; }
+/* watch->Mac cut-through: stay cut_lag packets behind the EHCI overlay's
+ * byte count (console `cutlag`). M3 blamed 64-128 stale bytes at packet
+ * starts on the count running ahead of the data in DRAM; the M4b soak
+ * traced that corruption to the musb TX double buffer instead
+ * (dcd_h3_musb.c fifo_map) and the canary below never tripped in 10k+
+ * packets at lag 0. Lag 1 is kept as margin (~10 us per message).
+ * `cutcanary 1` seeds every 64-byte line of a cut-through read with a
+ * marker in its last word and forwards a line only once the marker is
+ * gone; cut_stale[k] (k = line within the packet) counts lines the count
+ * called landed that still held it: the HC's real lag, measured. */
+static uint32_t cut_lag = 1;
+static bool cut_canary = false;
+void bridge_set_cut_lag(uint32_t p) { cut_lag = p > 7 ? 7 : p; }
+uint32_t bridge_cut_lag(void) { return cut_lag; }
+void bridge_set_cut_canary(uint32_t on) { cut_canary = on != 0; }
+uint32_t bridge_cut_canary(void) { return cut_canary; }
+#define CANARY 0xC0DEFA11u
+static uint32_t cut_stale[8], cut_stale_total, cut_stale_max_pkt;
 uint32_t bridge_cut(void) { return cut_mask; }
 
 /* WRTE->OKAY cycle stamps on the adb slot (BARE-METAL.md M3 gate). One
@@ -512,6 +531,11 @@ static void w2h_fill(struct slot *s)
 	if (want > chunk) want = chunk;
 	d->expect = want;
 	dir_fill_armed(d, i);
+	d->verified = 0;
+	if (cut_canary && want > PKT) {
+		for (uint32_t o = 60; o < want; o += 64) *(volatile uint32_t *)(d->buf[i] + o) = CANARY;
+		dcache_clean_invalidate_range(d->buf[i], want);
+	}
 	tuh_xfer_t x = { .daddr = s->daddr, .ep_addr = s->w_in, .buflen = (uint16_t)want, .buffer = d->buf[i],
 			 .complete_cb = w_in_cb, .user_data = (uintptr_t)(s - slots) };
 	if (!tuh_edpt_xfer(&x)) {
@@ -561,10 +585,24 @@ static void w2h_drain_partial(struct slot *s)
 	 * packet's first burst(s) were still in flight when we read them (64-128
 	 * stale bytes at packet starts, md5 mismatch). Stay one packet behind;
 	 * the completion path delivers the rest. */
-	if (landed < PKT) return;
-	landed -= PKT;
+	if (landed < cut_lag * PKT) return;
+	landed -= cut_lag * PKT;
 	if (landed <= d->fwd) return;
 	int i = d->filling;
+	/* diagnostic: trust nothing the canary has not confirmed */
+	while (cut_canary && d->verified < landed) {
+		const volatile uint32_t *w = (const volatile uint32_t *)(d->buf[i] + d->verified + 60);
+		dcache_invalidate_range((const void *)w, 4);
+		if (*w == CANARY) {
+			cut_stale[(d->verified / 64) & 7]++; cut_stale_total++;
+			uint32_t ahead = (landed - d->verified + PKT - 1) / PKT;
+			if (ahead > cut_stale_max_pkt) cut_stale_max_pkt = ahead;
+			break;
+		}
+		d->verified += 64;
+	}
+	if (cut_canary) landed = d->verified & ~(PKT - 1);
+	if (landed <= d->fwd) return;
 	uint32_t off = d->fwd;
 	d->fwd = landed;
 	d->partials++;
@@ -803,6 +841,7 @@ void bridge_stats_reset(void)
 {
 	memset(&cyc_push, 0, sizeof cyc_push);
 	memset(&cyc_pull, 0, sizeof cyc_pull);
+	memset(cut_stale, 0, sizeof cut_stale); cut_stale_total = 0; cut_stale_max_pkt = 0;
 	for (int i = 0; i < 2; i++) {
 		struct dir *ds[2] = { &slots[i].h2w, &slots[i].w2h };
 		for (int k = 0; k < 2; k++) {
@@ -828,6 +867,11 @@ void bridge_status(char *buf, unsigned n)
 		(unsigned long)fr.payload_remaining, fr.dropping, fr.unsynced, (unsigned long)fr.cnxn_len, fr.cnxn_pending,
 		fr.cnxn_seen_since_bind, (unsigned long)fr.captures, (unsigned long)fr.replays, (unsigned long)fr.dropped_msgs,
 		(unsigned long)fr.resyncs, (unsigned long)fr.pulses, slots[0].gadget_up && usbd_edpt_stalled(0, slots[0].g_in));
+	k += snprintf(buf + k, n - (unsigned)k,
+		"cut_w2h=lag:%lu canary:%d stale:%lu max_ahead_pkts:%lu lines:%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu\n",
+		(unsigned long)cut_lag, cut_canary, (unsigned long)cut_stale_total, (unsigned long)cut_stale_max_pkt,
+		(unsigned long)cut_stale[0], (unsigned long)cut_stale[1], (unsigned long)cut_stale[2], (unsigned long)cut_stale[3],
+		(unsigned long)cut_stale[4], (unsigned long)cut_stale[5], (unsigned long)cut_stale[6], (unsigned long)cut_stale[7]);
 	k += cyc_status("push", &cyc_push, buf + k, n - (unsigned)k);
 	k += cyc_status("pull", &cyc_pull, buf + k, n - (unsigned)k);
 	for (int i = 0; i < 2 && k < (int)n; i++) {

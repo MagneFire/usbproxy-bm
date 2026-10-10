@@ -1316,7 +1316,15 @@ bool dcd_edpt_open(uint8_t rhport, tusb_desc_endpoint_t const * ep_desc)
   static const struct { uint16_t addr; uint8_t code; uint8_t dpb; } fifo_map[TUP_DCD_ENDPOINT_MAX][2] = {
     /* [ep][0=OUT/RX, 1=IN/TX] */
     { {0, 3, 0},      {0, 3, 0}    },   /* ep0: fixed 64 */
-    { {2048, 6, 1},   {1024, 6, 1} },   /* ep1 adb: both double-buffered */
+    /* ep1 adb: RX double-buffered, TX single. PIO loads into a
+     * double-buffered TX FIFO lost their first 16 words about once per
+     * 2000 packets while the RX side was busy (concurrent push+pull): the
+     * packet went out with the other buffer's old first 64 bytes. Same
+     * with and without the early second-buffer fill below, never with the
+     * inner DMA loading the FIFO, never single-buffered (20/20 soak runs).
+     * Linux keeps the sunxi FIFOs single-buffered too. DPB gave no
+     * throughput anyway (M3). */
+    { {2048, 6, 1},   {1024, 6, 0} },
     { {3584, 6, 0},   {3072, 6, 0} },   /* ep2 fastboot */
     { {0, 0, 0},      {64, 3, 0}   },   /* ep3 CDC notify (IN only, 64) */
     { {4096, 6, 0},   {512, 6, 0}  },   /* ep4 CDC data */

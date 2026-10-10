@@ -37,4 +37,8 @@ void bridge_set_cut(uint32_t mask);
 uint32_t bridge_cut(void);
 void bridge_set_cut_floor(uint32_t bytes);
 uint32_t bridge_cut_floor(void);
+void bridge_set_cut_lag(uint32_t packets);
+uint32_t bridge_cut_lag(void);
+void bridge_set_cut_canary(uint32_t on);
+uint32_t bridge_cut_canary(void);
 #endif

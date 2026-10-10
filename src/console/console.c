@@ -114,7 +114,7 @@ static void cmd_status(void)
 	host_cycle_status(buf, sizeof buf);
 	con_out(buf);
 	{
-		static char bbuf[900];		/* framer + two cycle lines + two bridge lines */
+		static char bbuf[1200];		/* framer + two cycle lines + two bridge lines */
 		bridge_status(bbuf, sizeof bbuf);
 		con_out(bbuf);
 	}
@@ -205,6 +205,12 @@ static void run(char *s)
 		con_out("ehci halted; expect a watchdog reset in ~10 s\n");
 	} else if (!strcmp(c, "hostcycle")) {
 		host_cycle_start(argc > 1 ? (unsigned)strtoul(argv[1], 0, 0) : 1);
+	} else if (!strcmp(c, "cutlag")) {
+		if (argc > 1) bridge_set_cut_lag(strtoul(argv[1], 0, 0));
+		snprintf(buf, sizeof buf, "cutlag=%lu\n", (unsigned long)bridge_cut_lag());
+	} else if (!strcmp(c, "cutcanary")) {
+		if (argc > 1) bridge_set_cut_canary(strtoul(argv[1], 0, 0));
+		snprintf(buf, sizeof buf, "cutcanary=%lu\n", (unsigned long)bridge_cut_canary());
 	} else if (!strcmp(c, "cutfloor")) {
 		if (argc > 1) bridge_set_cut_floor(strtoul(argv[1], 0, 0));
 		snprintf(buf, sizeof buf, "cutfloor=%lu\n", (unsigned long)bridge_cut_floor());
