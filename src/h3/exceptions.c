@@ -21,6 +21,22 @@ void exception_handler(uint32_t type, uint32_t *frame)
 	for (int i = 0; i < 13; i++)
 		log_printf("r%d=%08lx%s", i, (unsigned long)frame[i], (i % 4 == 3) ? "\n" : " ");
 	log_printf("\n");
+	/* The interrupted mode's lr/sp (main loop and ISRs run in SVC/IRQ
+	 * mode) and the top of its stack: addr2line on the text addresses in
+	 * there is the backtrace. The CPSR saved on entry tells which mode. */
+	uint32_t spsr, cpsr, lr_x = 0, sp_x = 0;
+	__asm__ volatile("mrs %0, spsr\n mrs %1, cpsr" : "=r"(spsr), "=r"(cpsr));
+	if ((spsr & 0x1f) == 0x13)
+		__asm__ volatile("cps #0x13\n mov %0, lr\n mov %1, sp\n msr cpsr_c, %2" : "=r"(lr_x), "=r"(sp_x) : "r"(cpsr) : "memory");
+	else if ((spsr & 0x1f) == 0x12)
+		__asm__ volatile("cps #0x12\n mov %0, lr\n mov %1, sp\n msr cpsr_c, %2" : "=r"(lr_x), "=r"(sp_x) : "r"(cpsr) : "memory");
+	log_printf("spsr=%08lx lr=%08lx sp=%08lx stack:", (unsigned long)spsr, (unsigned long)lr_x, (unsigned long)sp_x);
+	if (sp_x >= 0x40000000u && sp_x < 0x50000000u) {
+		const uint32_t *w = (const uint32_t *)sp_x;
+		for (int i = 0; i < 32; i++)
+			log_printf("%s%08lx", (i % 8 == 0) ? "\n  " : " ", (unsigned long)w[i]);
+	}
+	log_printf("\n");
 	log_set_fault(rec);
 	rtc_gp_write(0, 0xFA000000u | (type << 20) | ((pc - (uint32_t)IMAGE_BASE) & 0xfffffu));
 	uart_flush();
