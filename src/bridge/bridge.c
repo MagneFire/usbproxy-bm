@@ -606,6 +606,13 @@ static void w2h_drain_partial(struct slot *s)
 	uint32_t off = d->fwd;
 	d->fwd = landed;
 	d->partials++;
+	/* The buffers are cached and contiguous: while the musb PIO reads the
+	 * tail of one buffer the core prefetches the first line(s) of the next,
+	 * which the EHCI may still be filling. The lines handed on are
+	 * invalidated here, after their DMA finished, so the PIO sees DRAM
+	 * (64-128 stale bytes at packet starts otherwise; the completion path
+	 * gets the same from the hcd's invalidate on completion). */
+	dcache_invalidate_range(d->buf[i] + off, landed - off);
 	w2h_submit(s, i, off, landed - off, true);
 }
 

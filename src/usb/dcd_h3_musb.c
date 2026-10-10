@@ -728,6 +728,8 @@ static void handle_dma_done(uint8_t rhport, unsigned ch)
   pipe_state_t *pipe = &_dcd.pipe[dir_in][epn - 1];
   USBC_SelectActiveEp(epn);
   uint32_t moved = dma_stop(ch);
+  /* RX: drop lines the core may have prefetched while the DMA wrote them */
+  if (ch == DMA_CHAN_RX && moved) dcache_invalidate_range(pipe->buf, moved);
   if (d->tx) {
     /* the last packet(s) may still sit in the FIFO: the vendor waits for it */
     uint32_t t0 = time_us();
