@@ -243,6 +243,24 @@ static u32 __USBC_Dev_Tx_IsEpStall(void)
 {
 	return USBC_REG_test_bit_w(USBC_BP_TXCSR_D_SENT_STALL, USBC_REG_TXCSR(USBC0_BASE));
 }
+/* H3: a STALL went out. Acknowledge it but keep SEND_STALL: the endpoint
+ * stays halted until dcd_edpt_clear_stall() (the host clearing its side of
+ * the pipe does not reach us: IOKit's ClearPipeStall is host-only). The
+ * upstream sunxi DCD cleared SEND_STALL here, so a halt stalled exactly one
+ * transaction and the bridge's halt pulse never kicked macOS adb. */
+static void __USBC_Dev_Tx_AckSentStall(void)
+{
+	u16 reg_val = USBC_Readw(USBC_REG_TXCSR(USBC0_BASE));
+	reg_val &= (u16)~((1 << USBC_BP_TXCSR_D_SENT_STALL) | (1 << USBC_BP_TXCSR_D_UNDER_RUN) | (1 << USBC_BP_TXCSR_D_TX_READY));
+	USBC_Writew(reg_val, USBC_REG_TXCSR(USBC0_BASE));
+}
+static void __USBC_Dev_Rx_AckSentStall(void)
+{
+	u16 reg_val = USBC_Readw(USBC_REG_RXCSR(USBC0_BASE));
+	reg_val &= (u16)~((1 << USBC_BP_RXCSR_D_SENT_STALL) | (1 << USBC_BP_RXCSR_D_OVERRUN));
+	USBC_Writew(reg_val, USBC_REG_RXCSR(USBC0_BASE));
+}
+
 static void __USBC_Dev_Tx_ClearStall(void)
 {
 	u32 reg_val = USBC_Readw(USBC_REG_TXCSR(USBC0_BASE));
@@ -1070,14 +1088,14 @@ static void process_edpt_n(uint8_t rhport, uint_fast8_t ep_addr)
   if (dir_in) {
     // TU_LOG1(" TXCSRL%d = %x\r\n", epn_minus1 + 1, regs->TXCSRL);
     if (__USBC_Dev_Tx_IsEpStall()) {
-	  __USBC_Dev_Tx_ClearStall();
+      __USBC_Dev_Tx_AckSentStall();
       return;
     }
     completed = handle_xfer_in(ep_addr);
   } else {
     // TU_LOG1(" RXCSRL%d = %x\r\n", epn_minus1 + 1, regs->RXCSRL);
     if (__USBC_Dev_Rx_IsEpStall()) {
-	    __USBC_Dev_Rx_ClearStall();
+      __USBC_Dev_Rx_AckSentStall();
       return;
     }
     /* H3 DPB: the other buffer may hold the next packet already and its
@@ -1463,8 +1481,10 @@ void dcd_edpt_clear_stall(uint8_t rhport, uint8_t ep_addr)
   if (0 != epn) {
     if (tu_edpt_dir(ep_addr)) { /* IN */
       __USBC_Dev_Tx_ClearStall();
+      USBC_REG_set_bit_w(USBC_BP_TXCSR_D_CLEAR_DATA_TOGGLE, USBC_REG_TXCSR(USBC0_BASE));
     } else { /* OUT */
       __USBC_Dev_Rx_ClearStall();
+      USBC_REG_set_bit_w(USBC_BP_RXCSR_D_CLEAR_DATA_TOGGLE, USBC_REG_RXCSR(USBC0_BASE));
     }
   }
   musb_int_unmask();
