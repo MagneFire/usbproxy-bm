@@ -57,7 +57,10 @@ void bridge_set_chunk(uint32_t bytes)
 	chunk = bytes & ~511u;
 }
 uint32_t bridge_chunk(void) { return chunk; }
-static uint32_t cut_mask = 2;	/* watch->Mac on; Mac->watch off: per-packet OUT transfers made the watch respond ~200 us later */		/* bit0: Mac->watch cut-through, bit1: watch->Mac (console `cut`) */
+static uint32_t cut_floor = 2048;	/* Mac->watch: forward only in pieces this large (console `cutfloor`) */
+void bridge_set_cut_floor(uint32_t b) { cut_floor = (b < 512 ? 512 : b > BRIDGE_BUF ? BRIDGE_BUF : b) & ~511u; }
+uint32_t bridge_cut_floor(void) { return cut_floor; }
+static uint32_t cut_mask = 2;	/* watch->Mac on; Mac->watch (2 KiB floor) measured no gain: the watch's OKAY time does not follow our delivery */	/* watch->Mac on; Mac->watch off: per-packet OUT transfers made the watch respond ~200 us later */		/* bit0: Mac->watch cut-through, bit1: watch->Mac (console `cut`) */
 void bridge_set_cut(uint32_t m) { cut_mask = m & 3; }
 uint32_t bridge_cut(void) { return cut_mask; }
 
@@ -282,8 +285,16 @@ static void h2w_drain_partial(struct slot *s)
 	if (!(cut_mask & 1)) return;
 	if (!s->bound || d->draining >= 0 || d->filling < 0) return;
 	if (oldest_full(d) >= 0) return;		/* order: complete buffers first */
+	bool dma;
+	extern uint32_t dcd_h3_out_landed(uint8_t, bool *);
+	d->progress = dcd_h3_out_landed(s->g_out, &dma);
 	uint32_t landed = d->progress & ~(PKT - 1);
-	if (landed <= d->fwd) return;
+	if (dma) { if (landed < PKT) return; landed -= PKT; }	/* residual may run ahead of the data */
+	/* Per-packet OUT transfers made the watch slower (its OKAY ~200 us
+	 * later); hand on whole 2 KiB halves instead. The remainder goes with
+	 * the fill's completion. */
+	if (landed < d->fwd + cut_floor) return;
+	landed = d->fwd + ((landed - d->fwd) / cut_floor) * cut_floor;
 	int i = d->filling;
 	uint32_t off = d->fwd;
 	d->fwd = landed;
@@ -593,8 +604,8 @@ void bridge_status(char *buf, unsigned n)
 	for (int i = 0; i < 2 && k < (int)n; i++) {
 		struct slot *s = &slots[i];
 		k += snprintf(buf + k, n - (unsigned)k,
-			"bridge%d=up:%d bound:%d chunk:%lu cut:%lu h2w:%lu/%lu zlp:%lu part:%lu fill:%lu hand:%lu drain:%lu w2h:%lu/%lu zlp:%lu part:%lu fill:%lu hand:%lu drain:%lu\n", i,
-			s->gadget_up, s->bound, (unsigned long)chunk, (unsigned long)cut_mask,
+			"bridge%d=up:%d bound:%d chunk:%lu cut:%lu floor:%lu h2w:%lu/%lu zlp:%lu part:%lu fill:%lu hand:%lu drain:%lu w2h:%lu/%lu zlp:%lu part:%lu fill:%lu hand:%lu drain:%lu\n", i,
+			s->gadget_up, s->bound, (unsigned long)chunk, (unsigned long)cut_mask, (unsigned long)cut_floor,
 			(unsigned long)s->h2w.msgs, (unsigned long)s->h2w.bytes, (unsigned long)s->h2w.zlps, (unsigned long)s->h2w.partials,
 			(unsigned long)(s->h2w.fill_n ? s->h2w.fill_us / s->h2w.fill_n : 0),
 			(unsigned long)(s->h2w.hand_n ? s->h2w.hand_us / s->h2w.hand_n : 0),

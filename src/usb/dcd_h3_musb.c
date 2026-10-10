@@ -681,6 +681,26 @@ static uint32_t dma_stop(unsigned ch)
 static bool handle_xfer_in(uint_fast8_t ep_addr);
 static bool handle_xfer_out(uint_fast8_t ep_addr);
 
+/* Bytes of the current OUT transfer on ep_addr that have reached memory, for
+ * cut-through forwarding (bridge_poll). PIO bytes are exact (the ISR copied
+ * them); with RX DMA running the channel's residual count is added and
+ * *dma says so, the caller holds a packet back as with the EHCI overlay. */
+uint32_t dcd_h3_out_landed(uint8_t ep_addr, bool *dma)
+{
+  unsigned epn = tu_edpt_number(ep_addr);
+  pipe_state_t *pipe = &_dcd.pipe[TUSB_DIR_OUT][epn - 1];
+  *dma = false;
+  if (!pipe->buf) return 0;
+  uint32_t landed = pipe->length - pipe->remaining;
+  struct h3_dma *d = &dma_ch[DMA_CHAN_RX];
+  if (d->active && d->ep_addr == ep_addr) {
+    uint32_t resid = USBC_Readl(DMA_BC(DMA_CHAN_RX));
+    if (resid <= d->len) landed += d->len - resid;
+    *dma = true;
+  }
+  return landed;
+}
+
 /* DMA channel finished its byte count (ISR) */
 static void handle_dma_done(uint8_t rhport, unsigned ch)
 {

@@ -197,6 +197,10 @@ static void run(char *s)
 		con_out(buf);
 	} else if (!strcmp(c, "zero")) {
 		bridge_stats_reset();
+	} else if (!strcmp(c, "cutfloor")) {
+		if (argc > 1) bridge_set_cut_floor(strtoul(argv[1], 0, 0));
+		snprintf(buf, sizeof buf, "cutfloor=%lu\n", (unsigned long)bridge_cut_floor());
+		con_out(buf);
 	} else if (!strcmp(c, "cut")) {
 		if (argc > 1) bridge_set_cut(strtoul(argv[1], 0, 0));
 		snprintf(buf, sizeof buf, "cut=%lu\n", (unsigned long)bridge_cut());

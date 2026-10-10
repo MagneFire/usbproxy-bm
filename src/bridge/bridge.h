@@ -34,4 +34,6 @@ void bridge_set_chunk(uint32_t bytes);
 uint32_t bridge_chunk(void);
 void bridge_set_cut(uint32_t mask);
 uint32_t bridge_cut(void);
+void bridge_set_cut_floor(uint32_t bytes);
+uint32_t bridge_cut_floor(void);
 #endif
