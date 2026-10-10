@@ -10,7 +10,7 @@ SIZE      := $(CROSS)size
 MKIMAGE   ?= mkimage
 SUNXI_FEL ?= $(HOME)/.local/bin/sunxi-fel
 APPLIANCE ?= uv run $(HOME)/Downloads/meta-usbproxy/scripts/appliance.py
-SPL       ?= $(HOME)/Downloads/devcard-u-boot-sunxi-with-spl.bin
+SPL       ?= $(BUILD)/boot0.bin      # what `make fel` runs first to bring DRAM up (the U-Boot SPL still works here)
 
 BUILD   := build
 TUSB    := third_party/tinyusb/src
@@ -38,6 +38,7 @@ CFLAGS := -mcpu=cortex-a7 -marm -mfloat-abi=soft -ffreestanding -nostdlib \
           -ffunction-sections -fdata-sections -fno-common \
           -Isrc -Isrc/usb -I$(TUSB) -I$(TUSB)/portable/ehci \
           -I$(BUILD) -DCFG_TUSB_MCU=OPT_MCU_NONE -DGADGET_SERIAL=\"$(GADGET_SERIAL)\"
+CFLAGS += $(EXTRA_CFLAGS)
 ASFLAGS := $(CFLAGS)
 LDFLAGS := -nostdlib -T ld/fw.ld -Wl,--gc-sections -Wl,--no-warn-rwx-segments -Wl,-Map=$(BUILD)/fw.map
 
@@ -74,6 +75,33 @@ uimage: $(BUILD)/fw.bin
 	$(MKIMAGE) -A arm -O linux -T kernel -C none -a $(LOAD) -e $(LOAD) \
 	  -n "usbproxy-bm $(GITREV)$(DIRTY)" -d $(BUILD)/fw.bin $(BUILD)/fw.uimg
 
+# boot0: our replacement for the U-Boot SPL (src/boot0/, BARE-METAL.md section
+# 8c). eGON image for the BROM at SD sector 16; clocks, DRAM, reads fw.uimg
+# from sector 0x18800, jumps. Shares the H3 helpers and libc with the firmware.
+BOOT0_SRCS := src/boot0/start.S src/h3/cache.S src/boot0/main.c src/h3/clock.c \
+              src/h3/dram.c src/h3/mmc.c src/h3/uart.c src/h3/ccu.c src/h3/wdt.c \
+              src/h3/rtc.c src/h3/timer.c src/lib/libc.c src/lib/fmt.c src/lib/crc32.c
+BOOT0_OBJS := $(patsubst %,$(BUILD)/boot0/%.o,$(BOOT0_SRCS))
+BOOT0_LDFLAGS := -nostdlib -T ld/boot0.ld -Wl,--gc-sections -Wl,--no-warn-rwx-segments -Wl,-Map=$(BUILD)/boot0.map
+
+$(BUILD)/boot0/%.c.o: %.c $(BUILD)/gitrev.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DBOOT0 -MMD -c $< -o $@
+
+$(BUILD)/boot0/%.S.o: %.S
+	@mkdir -p $(dir $@)
+	$(CC) $(ASFLAGS) -DBOOT0 -MMD -c $< -o $@
+
+$(BUILD)/boot0.elf: $(BOOT0_OBJS) ld/boot0.ld
+	$(CC) $(CFLAGS) $(BOOT0_LDFLAGS) -o $@ $(BOOT0_OBJS) -lgcc
+
+$(BUILD)/boot0.bin: $(BUILD)/boot0.elf tools/egon.py
+	$(OBJCOPY) -O binary $< $(BUILD)/boot0.raw
+	python3 tools/egon.py $(BUILD)/boot0.raw $@
+	@$(SIZE) $<
+
+boot0: $(BUILD)/boot0.bin
+
 # Dev loop: U-Boot prompt over the UART dongle, Y-modem into RAM, go.
 run-uboot: $(BUILD)/fw.bin
 	$(APPLIANCE) bm run $(BUILD)/fw.bin
@@ -92,7 +120,7 @@ flash-sd: uimage
 	diskutil eject $(DISK)
 
 # Recovery / card-less dev: BROM FEL over the OTG cable.
-fel: $(BUILD)/fw.bin
+fel: $(BUILD)/fw.bin $(SPL)
 	$(SUNXI_FEL) -v spl $(SPL)
 	$(SUNXI_FEL) -p write $(LOAD) $(BUILD)/fw.bin
 	$(SUNXI_FEL) exe $(LOAD)
@@ -113,5 +141,5 @@ disasm: $(BUILD)/fw.elf
 clean:
 	rm -rf $(BUILD)
 
--include $(OBJS:.o=.d)
-.PHONY: all size uimage run-uboot flash-uboot flash-sd fel disasm clean
+-include $(OBJS:.o=.d) $(BOOT0_OBJS:.o=.d)
+.PHONY: all size uimage boot0 run-uboot flash-uboot flash-sd fel disasm clean
