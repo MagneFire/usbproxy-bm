@@ -81,8 +81,9 @@ static bool slots_control(uint8_t rhport, uint8_t stage, tusb_control_request_t 
 			usbd_edpt_stall(rhport, ep);
 			log_printf("slots: host cleared halt on EP%02x mid-pulse; re-stalled\n", ep);
 		}
+		return true;	/* usbd ACKs standard endpoint requests itself */
 	}
-	return true;
+	return false;		/* no class requests on the bridge interfaces */
 }
 
 static bool slots_xfer(uint8_t rhport, uint8_t ep_addr, xfer_result_t result, uint32_t xferred)
