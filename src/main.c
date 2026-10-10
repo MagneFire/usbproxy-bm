@@ -68,6 +68,7 @@ int main(void)
 		 * pass until the next interrupt, up to one SOF period (125 us). */
 		extern void hcd_h3_poll(void);
 		hcd_h3_poll();
+		bridge_poll();
 		__asm__ volatile("cpsid i" ::: "memory");
 		if (!tud_task_event_ready() && !tuh_task_event_ready() && !bridge_host_pending())
 			wfi();

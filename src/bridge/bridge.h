@@ -16,6 +16,7 @@ void bridge_init(void);
 void bridge_gadget_ready(int slot, uint8_t ep_in, uint8_t ep_out);   /* host configured: start reading */
 void bridge_gadget_gone(int slot);
 void bridge_gadget_out_done(int slot, uint32_t len);                 /* host -> gadget buffer filled */
+void bridge_gadget_out_progress(int slot, uint32_t bytes);           /* ISR: bytes landed so far in the current read */
 void bridge_gadget_in_done(int slot);                                /* gadget -> host write finished */
 /* watch side (host_mgr.c) */
 void bridge_bind(int slot, uint8_t daddr, uint8_t ep_in, uint8_t ep_out);
@@ -23,10 +24,14 @@ void bridge_unbind(int slot);
 void bridge_watch_out_done(int slot, uint32_t len, int result);
 void bridge_watch_in_done(int slot, uint32_t len, int result);
 void bridge_status(char *buf, unsigned n);
-bool bridge_host_pending(void);		/* an EHCI transfer is in flight: poll, do not sleep */
+bool bridge_host_pending(void);
+void bridge_poll(void);
+void bridge_stats_reset(void);				/* main loop: cut-through forwarding */		/* an EHCI transfer is in flight: poll, do not sleep */
 /* Largest single transfer the datapath reads from either side (console
  * `chunk`): smaller chunks overlap the fill of one with the drain of the
  * previous at the price of more completions per message. */
 void bridge_set_chunk(uint32_t bytes);
 uint32_t bridge_chunk(void);
+void bridge_set_cut(uint32_t mask);
+uint32_t bridge_cut(void);
 #endif

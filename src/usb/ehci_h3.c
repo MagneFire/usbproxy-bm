@@ -759,6 +759,44 @@ void process_period_xfer_isr(uint8_t rhport, uint32_t interval_ms) {
   }
 }
 
+/* H3: NAK reload (RL) for every QH, live. 0 = retry a NAKing endpoint on
+ * every pass (minimum latency, maximum token rate); Linux uses 4 for HS
+ * bulk, after which the HC leaves the endpoint alone until the next
+ * microframe. Console `nakrl`. */
+static uint8_t h3_nak_rl = 0;
+void ehci_h3_set_nak_rl(uint8_t rl) {
+  h3_nak_rl = rl & 0xf;
+  ehci_qhd_t *head = list_get_async_head(1), *qhd = head;
+  do {
+    qhd->nak_reload = h3_nak_rl;
+    qhd = qhd_next(qhd);
+  } while (qhd != head);
+  for (uint32_t i = 0; i < QHD_MAX; i++)
+    if (ehci_data.qhd_pool[i].used) ehci_data.qhd_pool[i].nak_reload = h3_nak_rl;
+}
+uint8_t ehci_h3_nak_rl(void) { return h3_nak_rl; }
+
+/* H3: bytes landed so far for the transfer attached to (dev_addr, ep_addr),
+ * from the QH overlay the HC is executing. Valid only once the HC has
+ * fetched our qTD (current qTD pointer == attached qTD); 0 before that.
+ * The overlay's Total Bytes is updated after each transaction, data first. */
+uint32_t ehci_h3_xfer_progress(uint8_t dev_addr, uint8_t ep_addr) {
+  ehci_qhd_t *qhd = qhd_get_from_addr(dev_addr, ep_addr);
+  if (qhd == NULL) return 0;
+  ehci_qtd_t * volatile qtd = qhd->attached_qtd;
+  if (qtd == NULL) return 0;
+  if ((qhd->qtd_addr & ~0x1fu) != (uint32_t)(uintptr_t)qtd) return 0;
+  uint32_t total = qtd->expected_bytes;
+  /* The qTD slot is reused, so a matching pointer is not enough: until the
+   * HC fetches the new qTD the overlay still shows the previous transfer
+   * (Active=0, remaining 0) and would read as "all landed". In flight means
+   * the overlay is Active; retired means the qTD itself is no longer. */
+  if (!qhd->qtd_overlay.active)
+    return qtd->active ? 0 : total;
+  uint32_t rem = qhd->qtd_overlay.total_bytes;
+  return rem <= total ? total - rem : 0;
+}
+
 /* H3: completion polling. The Interrupt Threshold Control cannot go below
  * one microframe, so the completion IRQ lands up to 125 us after the HC
  * retired the qTD; the overlay's Active bit is current at once. The main
@@ -961,7 +999,7 @@ static void qhd_init(ehci_qhd_t *p_qhd, uint8_t dev_addr, tusb_desc_endpoint_t c
   p_qhd->head_list_flag     = (dev_addr == 0) ? 1 : 0; // addr0's endpoint is the static async list head
   p_qhd->max_packet_size    = tu_edpt_packet_size(ep_desc);
   p_qhd->fl_ctrl_ep_flag    = ((xfer_type == TUSB_XFER_CONTROL) && (p_qhd->ep_speed != TUSB_SPEED_HIGH))  ? 1 : 0;
-  p_qhd->nak_reload         = 0;
+  p_qhd->nak_reload         = h3_nak_rl;
 
   switch (xfer_type) {
     case TUSB_XFER_CONTROL:

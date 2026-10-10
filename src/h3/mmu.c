@@ -44,3 +44,34 @@ void mmu_init(void)
 	__asm__ volatile("mcr p15, 0, %0, c1, c0, 0" :: "r"(sctlr));
 	isb();
 }
+
+/* D-cache maintenance by address (to the point of coherency, i.e. through
+ * the A7's L2) for buffers shared with DMA engines (EHCI, musb DMA). */
+#define CACHE_LINE 64u
+void dcache_clean_range(const void *addr, uint32_t size)
+{
+	if (!size) return;
+	uintptr_t a = (uintptr_t)addr & ~(CACHE_LINE - 1), e = (uintptr_t)addr + size;
+	dmb();
+	for (; a < e; a += CACHE_LINE)
+		__asm__ volatile("mcr p15, 0, %0, c7, c10, 1" :: "r"(a));	/* DCCMVAC */
+	dsb();
+}
+void dcache_invalidate_range(const void *addr, uint32_t size)
+{
+	if (!size) return;
+	uintptr_t a = (uintptr_t)addr & ~(CACHE_LINE - 1), e = (uintptr_t)addr + size;
+	dmb();
+	for (; a < e; a += CACHE_LINE)
+		__asm__ volatile("mcr p15, 0, %0, c7, c6, 1" :: "r"(a));	/* DCIMVAC */
+	dsb();
+}
+void dcache_clean_invalidate_range(const void *addr, uint32_t size)
+{
+	if (!size) return;
+	uintptr_t a = (uintptr_t)addr & ~(CACHE_LINE - 1), e = (uintptr_t)addr + size;
+	dmb();
+	for (; a < e; a += CACHE_LINE)
+		__asm__ volatile("mcr p15, 0, %0, c7, c14, 1" :: "r"(a));	/* DCCIMVAC */
+	dsb();
+}

@@ -85,6 +85,21 @@ static void cmd_status(void)
 		snprintf(buf, sizeof buf, "musb_fifo_us_x10=rd:%lu (n %lu) wr:%lu (n %lu)\n",
 			 (unsigned long)rd, (unsigned long)rdn, (unsigned long)wr, (unsigned long)wrn);
 		con_out(buf);
+		extern void dcd_h3_gap_stats(uint32_t **, uint32_t **);
+		uint32_t *grx, *gtx;
+		dcd_h3_gap_stats(&grx, &gtx);
+		snprintf(buf, sizeof buf, "musb_gap_rx=<12:%lu <20:%lu <30:%lu <50:%lu <100:%lu more:%lu\nmusb_gap_tx=<12:%lu <20:%lu <30:%lu <50:%lu <100:%lu more:%lu\n",
+			 (unsigned long)grx[0], (unsigned long)grx[1], (unsigned long)grx[2], (unsigned long)grx[3], (unsigned long)grx[4], (unsigned long)grx[5],
+			 (unsigned long)gtx[0], (unsigned long)gtx[1], (unsigned long)gtx[2], (unsigned long)gtx[3], (unsigned long)gtx[4], (unsigned long)gtx[5]);
+		con_out(buf);
+		extern void dcd_h3_dma_stats(uint32_t *, uint32_t *, uint32_t *, uint32_t *, uint32_t *);
+		extern uint32_t dcd_h3_dma_enabled(void);
+		uint32_t drx, dtx, dsh, dsp, dbad;
+		dcd_h3_dma_stats(&drx, &dtx, &dsh, &dsp, &dbad);
+		snprintf(buf, sizeof buf, "musb_dma=mask:%lu rx:%lu tx:%lu rx_short:%lu tx_spin_us:%lu bad_resid:%lu\n",
+			 (unsigned long)dcd_h3_dma_enabled(), (unsigned long)drx, (unsigned long)dtx, (unsigned long)dsh,
+			 (unsigned long)dsp, (unsigned long)dbad);
+		con_out(buf);
 	}
 	for (int i = 0; i < SLOT_COUNT; i++) {
 		const struct slot_stats *st = slots_stats(i);
@@ -171,6 +186,20 @@ static void run(char *s)
 	} else if (!strcmp(c, "chunk")) {
 		if (argc > 1) bridge_set_chunk(strtoul(argv[1], 0, 0));
 		snprintf(buf, sizeof buf, "chunk=%lu\n", (unsigned long)bridge_chunk());
+		con_out(buf);
+	} else if (!strcmp(c, "dma") && argc > 1) {
+		extern void dcd_h3_dma_enable(uint32_t);
+		dcd_h3_dma_enable(strtoul(argv[1], 0, 0));
+	} else if (!strcmp(c, "nakrl")) {
+		extern void ehci_h3_set_nak_rl(uint8_t); extern uint8_t ehci_h3_nak_rl(void);
+		if (argc > 1) ehci_h3_set_nak_rl((uint8_t)strtoul(argv[1], 0, 0));
+		snprintf(buf, sizeof buf, "nakrl=%u\n", ehci_h3_nak_rl());
+		con_out(buf);
+	} else if (!strcmp(c, "zero")) {
+		bridge_stats_reset();
+	} else if (!strcmp(c, "cut")) {
+		if (argc > 1) bridge_set_cut(strtoul(argv[1], 0, 0));
+		snprintf(buf, sizeof buf, "cut=%lu\n", (unsigned long)bridge_cut());
 		con_out(buf);
 	} else if (!strcmp(c, "loop") && argc > 2) {
 		slots_loopback((int)strtoul(argv[1], 0, 0), argv[2][0] == '1');

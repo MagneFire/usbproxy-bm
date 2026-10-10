@@ -21,7 +21,6 @@
  * uncached .dma section (QH/qTD pool, enumeration buffers) need nothing.
  * MVA ops reach the point of coherency, i.e. through the A7's L2. */
 extern char __dma_start[], __dma_end[];
-#define CACHE_LINE 64u
 
 static inline bool uncached(const void *addr)
 {
@@ -30,34 +29,17 @@ static inline bool uncached(const void *addr)
 
 bool hcd_dcache_clean(void const *addr, uint32_t size)
 {
-	if (!size || uncached(addr)) return true;
-	uintptr_t a = (uintptr_t)addr & ~(CACHE_LINE - 1), e = (uintptr_t)addr + size;
-	dmb();
-	for (; a < e; a += CACHE_LINE)
-		__asm__ volatile("mcr p15, 0, %0, c7, c10, 1" :: "r"(a));	/* DCCMVAC */
-	dsb();
+	if (!uncached(addr)) dcache_clean_range(addr, size);
 	return true;
 }
-
 bool hcd_dcache_invalidate(void const *addr, uint32_t size)
 {
-	if (!size || uncached(addr)) return true;
-	uintptr_t a = (uintptr_t)addr & ~(CACHE_LINE - 1), e = (uintptr_t)addr + size;
-	dmb();
-	for (; a < e; a += CACHE_LINE)
-		__asm__ volatile("mcr p15, 0, %0, c7, c6, 1" :: "r"(a));	/* DCIMVAC */
-	dsb();
+	if (!uncached(addr)) dcache_invalidate_range(addr, size);
 	return true;
 }
-
 bool hcd_dcache_clean_invalidate(void const *addr, uint32_t size)
 {
-	if (!size || uncached(addr)) return true;
-	uintptr_t a = (uintptr_t)addr & ~(CACHE_LINE - 1), e = (uintptr_t)addr + size;
-	dmb();
-	for (; a < e; a += CACHE_LINE)
-		__asm__ volatile("mcr p15, 0, %0, c7, c14, 1" :: "r"(a));	/* DCCIMVAC */
-	dsb();
+	if (!uncached(addr)) dcache_clean_invalidate_range(addr, size);
 	return true;
 }
 

@@ -21,6 +21,11 @@ struct dir {
 	uint8_t state[BRIDGE_NBUF];
 	uint32_t seq[BRIDGE_NBUF];	/* fill order */
 	uint8_t tag[BRIDGE_NBUF];	/* what the buffer holds, for the cycle stamps */
+	uint32_t off[BRIDGE_NBUF];	/* bytes already forwarded early (cut-through) */
+	volatile uint32_t progress;	/* landed bytes of the filling buffer */
+	uint32_t fwd;			/* of those, handed on */
+	bool partial;			/* the drain in flight is a cut-through piece */
+	uint32_t partials;
 	uint32_t next_seq;
 	int filling, draining;		/* buffer index or -1 */
 	uint32_t msgs, bytes, zlps;
@@ -43,7 +48,7 @@ struct slot {
 };
 
 static struct slot slots[2];
-static uint32_t chunk = 2048;	/* measured best (BARE-METAL.md 8b, M3 optimisation): 4096 store-and-forwards, 1024/512 pay per-transfer gaps */
+static uint32_t chunk = BRIDGE_BUF;	/* with cut-through a whole message per read; 2048 was best before it */
 
 void bridge_set_chunk(uint32_t bytes)
 {
@@ -52,6 +57,9 @@ void bridge_set_chunk(uint32_t bytes)
 	chunk = bytes & ~511u;
 }
 uint32_t bridge_chunk(void) { return chunk; }
+static uint32_t cut_mask = 2;	/* watch->Mac on; Mac->watch off: per-packet OUT transfers made the watch respond ~200 us later */		/* bit0: Mac->watch cut-through, bit1: watch->Mac (console `cut`) */
+void bridge_set_cut(uint32_t m) { cut_mask = m & 3; }
+uint32_t bridge_cut(void) { return cut_mask; }
 
 /* WRTE->OKAY cycle stamps on the adb slot (BARE-METAL.md M3 gate). One
  * tracker per direction of the WRTE: "push" = WRTE from the Mac, "pull" =
@@ -189,6 +197,37 @@ static int any_empty(struct dir *d)
 	return -1;
 }
 
+/* Cut-through: while a buffer is still filling, whole packets that have
+ * already landed are forwarded ahead of the fill's completion (one drain in
+ * flight at a time, so the drain is of everything landed since the last
+ * one). d->progress is the landed byte count of the filling buffer (musb
+ * ISR for h2w, EHCI overlay for w2h); d->fwd what has been handed on.
+ * The remainder after the fill completes (short tail, or nothing) goes
+ * through the ordinary FULL->drain path from offset off[i]. Only whole
+ * 512-byte packets are forwarded early so the far side never sees a short
+ * packet before the message ends. */
+#define PKT 512u
+
+static void dir_fill_armed(struct dir *d, int i)
+{
+	d->state[i] = B_FILLING; d->filling = i;
+	d->off[i] = 0; d->fwd = 0; d->progress = 0;
+	d->t_fill_sub = time_us();
+}
+
+/* The filling buffer is complete with len bytes: hand the unforwarded rest
+ * to the drain path. Returns the buffer index, or -1 if nothing is left and
+ * the buffer could be released at once. */
+static int dir_fill_complete(struct dir *d, uint32_t len)
+{
+	int i = d->filling;
+	d->filling = -1;
+	d->fill_us += time_us() - d->t_fill_sub; d->fill_n++;
+	d->len[i] = len; d->off[i] = d->fwd; d->seq[i] = d->next_seq++;
+	d->state[i] = B_FULL;
+	return i;
+}
+
 /* ---- host -> watch ---------------------------------------------------- */
 static void h2w_fill(struct slot *s)
 {
@@ -196,28 +235,67 @@ static void h2w_fill(struct slot *s)
 	if (!s->gadget_up || d->filling >= 0) return;
 	int i = any_empty(d);
 	if (i < 0) return;
-	d->state[i] = B_FILLING; d->filling = i;
-	d->t_fill_sub = time_us();
+	dir_fill_armed(d, i);
 	usbd_edpt_xfer(0, s->g_out, d->buf[i], (uint16_t)chunk, false);
 }
 
 static void w_out_cb(tuh_xfer_t *x);
 
+static bool h2w_submit(struct slot *s, int i, uint32_t off, uint32_t len, bool partial)
+{
+	struct dir *d = &s->h2w;
+	d->draining = i; d->partial = partial;
+	d->t_drain_sub = time_us();
+	tuh_xfer_t x = { .daddr = s->daddr, .ep_addr = s->w_out, .buflen = (uint16_t)len, .buffer = d->buf[i] + off,
+			 .complete_cb = w_out_cb, .user_data = (uintptr_t)(s - slots) };
+	if (!tuh_edpt_xfer(&x)) {
+		d->draining = -1; d->partial = false;
+		log_printf("bridge: slot %d watch OUT submit failed\n", (int)(s - slots));
+		return false;
+	}
+	return true;
+}
+
 static void h2w_drain(struct slot *s)
 {
 	struct dir *d = &s->h2w;
 	if (!s->bound || d->draining >= 0) return;
-	int i = oldest_full(d);
-	if (i < 0) return;
-	d->state[i] = B_DRAINING; d->draining = i;
-	d->t_drain_sub = time_us();
-	d->hand_us += d->t_drain_sub - d->t_fill_done; d->hand_n++;
-	tuh_xfer_t x = { .daddr = s->daddr, .ep_addr = s->w_out, .buflen = d->len[i], .buffer = d->buf[i],
-			 .complete_cb = w_out_cb, .user_data = (uintptr_t)(s - slots) };
-	if (!tuh_edpt_xfer(&x)) {
-		d->state[i] = B_FULL; d->draining = -1;
-		log_printf("bridge: slot %d watch OUT submit failed\n", (int)(s - slots));
+	for (;;) {
+		int i = oldest_full(d);
+		if (i < 0) return;
+		if (d->off[i] >= d->len[i]) {		/* everything went out early */
+			d->state[i] = B_EMPTY;
+			continue;
+		}
+		d->hand_us += time_us() - d->t_fill_done; d->hand_n++;
+		d->state[i] = B_DRAINING;
+		if (!h2w_submit(s, i, d->off[i], d->len[i] - d->off[i], false))
+			d->state[i] = B_FULL;
+		return;
 	}
+}
+
+/* Cut-through for the filling buffer: forward landed whole packets. */
+static void h2w_drain_partial(struct slot *s)
+{
+	struct dir *d = &s->h2w;
+	if (!(cut_mask & 1)) return;
+	if (!s->bound || d->draining >= 0 || d->filling < 0) return;
+	if (oldest_full(d) >= 0) return;		/* order: complete buffers first */
+	uint32_t landed = d->progress & ~(PKT - 1);
+	if (landed <= d->fwd) return;
+	int i = d->filling;
+	uint32_t off = d->fwd;
+	d->fwd = landed;
+	d->partials++;
+	if (!h2w_submit(s, i, off, landed - off, true))
+		d->fwd = off;
+}
+
+void bridge_gadget_out_progress(int sl, uint32_t bytes)
+{
+	struct dir *d = &slots[sl & 1].h2w;
+	if (d->filling >= 0 && bytes > d->progress) d->progress = bytes;
 }
 
 void bridge_gadget_out_done(int sl, uint32_t len)
@@ -226,8 +304,6 @@ void bridge_gadget_out_done(int sl, uint32_t len)
 	struct dir *d = &s->h2w;
 	int i = d->filling;
 	if (i < 0) return;
-	d->filling = -1;
-	d->fill_us += time_us() - d->t_fill_sub; d->fill_n++;
 	d->msgs++; d->bytes += len;
 	if (!len) {
 		/* adb's libusb layer terminates every payload that is a multiple of
@@ -235,12 +311,14 @@ void bridge_gadget_out_done(int sl, uint32_t len)
 		 * needs it, and forwarding it costs an EHCI round per WRTE. */
 		d->zlps++;
 		if (s == &slots[0]) {
+			d->filling = -1;
+			d->fill_us += time_us() - d->t_fill_sub; d->fill_n++;
 			d->state[i] = B_EMPTY;
 			h2w_fill(s);
 			return;
 		}
 	}
-	d->len[i] = len; d->state[i] = B_FULL; d->seq[i] = d->next_seq++;
+	i = dir_fill_complete(d, len);
 	d->t_fill_done = time_us();
 	if (s == &slots[0]) cyc_fill_done(true, d, i, len, d->t_fill_done);
 	h2w_drain(s);
@@ -259,13 +337,18 @@ void bridge_watch_out_done(int sl, uint32_t len, int result)
 	int i = d->draining;
 	if (i < 0) return;
 	d->draining = -1;
+	bool partial = d->partial; d->partial = false;
 	uint32_t now = time_us();
 	d->drain_us += now - d->t_drain_sub; d->drain_n++;
 	if (result != XFER_RESULT_SUCCESS)
-		log_printf("bridge: slot %d watch OUT result %d (%lu/%lu)\n", sl, result, (unsigned long)len, (unsigned long)d->len[i]);
+		log_printf("bridge: slot %d watch OUT result %d (%lu)\n", sl, result, (unsigned long)len);
 	if (s == &slots[0]) cyc_drain_done(true, d, i, now);
-	d->state[i] = B_EMPTY;
+	if (!partial)
+		d->state[i] = B_EMPTY;
+	/* partial: the buffer is still FILLING (more to come) or already FULL
+	 * with its remainder, which h2w_drain picks up (or frees) below. */
 	h2w_drain(s);
+	h2w_drain_partial(s);
 	h2w_fill(s);
 }
 
@@ -290,8 +373,7 @@ static void w2h_fill(struct slot *s)
 		want = d->pending_payload ? d->pending_payload : ADB_HDR_LEN;
 	if (want > chunk) want = chunk;
 	d->expect = want;
-	d->state[i] = B_FILLING; d->filling = i;
-	d->t_fill_sub = time_us();
+	dir_fill_armed(d, i);
 	tuh_xfer_t x = { .daddr = s->daddr, .ep_addr = s->w_in, .buflen = (uint16_t)want, .buffer = d->buf[i],
 			 .complete_cb = w_in_cb, .user_data = (uintptr_t)(s - slots) };
 	if (!tuh_edpt_xfer(&x)) {
@@ -300,16 +382,55 @@ static void w2h_fill(struct slot *s)
 	}
 }
 
+static void w2h_submit(struct slot *s, int i, uint32_t off, uint32_t len, bool partial)
+{
+	struct dir *d = &s->w2h;
+	d->draining = i; d->partial = partial;
+	d->t_drain_sub = time_us();
+	usbd_edpt_xfer(0, s->g_in, d->buf[i] + off, (uint16_t)len, false);
+}
+
 static void w2h_drain(struct slot *s)
 {
 	struct dir *d = &s->w2h;
 	if (!s->gadget_up || d->draining >= 0) return;
-	int i = oldest_full(d);
-	if (i < 0) return;
-	d->state[i] = B_DRAINING; d->draining = i;
-	d->t_drain_sub = time_us();
-	d->hand_us += d->t_drain_sub - d->t_fill_done; d->hand_n++;
-	usbd_edpt_xfer(0, s->g_in, d->buf[i], (uint16_t)d->len[i], false);
+	for (;;) {
+		int i = oldest_full(d);
+		if (i < 0) return;
+		if (d->off[i] >= d->len[i] && d->len[i] != 0) {	/* everything went out early */
+			d->state[i] = B_EMPTY;
+			continue;
+		}
+		d->hand_us += time_us() - d->t_fill_done; d->hand_n++;
+		d->state[i] = B_DRAINING;
+		w2h_submit(s, i, d->off[i], d->len[i] - d->off[i], false);
+		return;
+	}
+}
+
+uint32_t ehci_h3_xfer_progress(uint8_t dev_addr, uint8_t ep_addr);
+
+static void w2h_drain_partial(struct slot *s)
+{
+	struct dir *d = &s->w2h;
+	if (!(cut_mask & 2)) return;
+	if (!s->gadget_up || !s->bound || d->draining >= 0 || d->filling < 0) return;
+	if (d->expect <= PKT) return;			/* headers and single packets: no point */
+	if (oldest_full(d) >= 0) return;
+	d->progress = ehci_h3_xfer_progress(s->daddr, s->w_in);
+	uint32_t landed = d->progress & ~(PKT - 1);
+	/* The HC's byte count in the overlay runs ahead of the data: the newest
+	 * packet's first burst(s) were still in flight when we read them (64-128
+	 * stale bytes at packet starts, md5 mismatch). Stay one packet behind;
+	 * the completion path delivers the rest. */
+	if (landed < PKT) return;
+	landed -= PKT;
+	if (landed <= d->fwd) return;
+	int i = d->filling;
+	uint32_t off = d->fwd;
+	d->fwd = landed;
+	d->partials++;
+	w2h_submit(s, i, off, landed - off, true);
 }
 
 static void w_in_cb(tuh_xfer_t *x)
@@ -323,11 +444,16 @@ void bridge_watch_in_done(int sl, uint32_t len, int result)
 	struct dir *d = &s->w2h;
 	int i = d->filling;
 	if (i < 0) return;
-	d->filling = -1;
-	d->fill_us += time_us() - d->t_fill_sub; d->fill_n++;
 	if (result != XFER_RESULT_SUCCESS) {
 		log_printf("bridge: slot %d watch IN result %d\n", sl, result);
-		d->state[i] = B_EMPTY;
+		d->filling = -1;
+		if (d->fwd && d->draining == i) {
+			/* a partial of this buffer is on its way to the Mac: let it
+			 * finish, the buffer frees on its completion */
+			d->state[i] = B_FULL; d->len[i] = d->fwd; d->off[i] = d->fwd;
+		} else {
+			d->state[i] = B_EMPTY;
+		}
 		if (s->bound) w2h_fill(s);
 		return;
 	}
@@ -345,7 +471,8 @@ void bridge_watch_in_done(int sl, uint32_t len, int result)
 			d->pending_payload = 0;
 		}
 	}
-	d->len[i] = len; d->state[i] = B_FULL; d->seq[i] = d->next_seq++;
+	if (len < d->fwd) d->fwd = len;			/* cannot happen; keep off <= len */
+	i = dir_fill_complete(d, len);
 	d->msgs++; d->bytes += len; if (!len) d->zlps++;
 	d->t_fill_done = time_us();
 	if (s == &slots[0]) cyc_fill_done(false, d, i, len, d->t_fill_done);
@@ -360,12 +487,24 @@ void bridge_gadget_in_done(int sl)
 	int i = d->draining;
 	if (i < 0) return;
 	d->draining = -1;
+	bool partial = d->partial; d->partial = false;
 	uint32_t now = time_us();
 	d->drain_us += now - d->t_drain_sub; d->drain_n++;
 	if (s == &slots[0]) cyc_drain_done(false, d, i, now);
-	d->state[i] = B_EMPTY;
+	if (!partial)
+		d->state[i] = B_EMPTY;
 	w2h_drain(s);
+	w2h_drain_partial(s);
 	w2h_fill(s);
+}
+
+/* Main loop: forward what has landed so far (both directions, adb slot). */
+void bridge_poll(void)
+{
+	struct slot *s = &slots[0];
+	if (!s->bound) return;
+	h2w_drain_partial(s);
+	w2h_drain_partial(s);
 }
 
 /* ---- lifecycle --------------------------------------------------------- */
@@ -373,6 +512,7 @@ static void dir_reset(struct dir *d)
 {
 	memset(d->state, 0, sizeof d->state);
 	d->filling = d->draining = -1;
+	d->partial = false; d->fwd = 0; d->progress = 0;
 }
 
 void bridge_init(void)
@@ -387,7 +527,7 @@ void bridge_gadget_ready(int sl, uint8_t ep_in, uint8_t ep_out)
 	s->g_in = ep_in; s->g_out = ep_out; s->gadget_up = true;
 	/* Anything the gadget had in flight is gone with the (re)configuration. */
 	if (s->h2w.filling >= 0) { s->h2w.state[s->h2w.filling] = B_EMPTY; s->h2w.filling = -1; }
-	if (s->w2h.draining >= 0) { s->w2h.state[s->w2h.draining] = B_EMPTY; s->w2h.draining = -1; }
+	if (s->w2h.draining >= 0) { s->w2h.state[s->w2h.draining] = B_EMPTY; s->w2h.draining = -1; s->w2h.partial = false; }
 	h2w_fill(s);
 	w2h_drain(s);
 }
@@ -397,7 +537,7 @@ void bridge_gadget_gone(int sl)
 	struct slot *s = &slots[sl & 1];
 	s->gadget_up = false;
 	if (s->h2w.filling >= 0) { s->h2w.state[s->h2w.filling] = B_EMPTY; s->h2w.filling = -1; }
-	if (s->w2h.draining >= 0) { s->w2h.state[s->w2h.draining] = B_EMPTY; s->w2h.draining = -1; }
+	if (s->w2h.draining >= 0) { s->w2h.state[s->w2h.draining] = B_EMPTY; s->w2h.draining = -1; s->w2h.partial = false; }
 }
 
 void bridge_bind(int sl, uint8_t daddr, uint8_t ep_in, uint8_t ep_out)
@@ -419,9 +559,23 @@ void bridge_unbind(int sl)
 	struct slot *s = &slots[sl & 1];
 	s->bound = false;
 	/* The host stack cancels the device's transfers at close; drop ours. */
-	if (s->h2w.draining >= 0) { s->h2w.state[s->h2w.draining] = B_EMPTY; s->h2w.draining = -1; }
+	if (s->h2w.draining >= 0) { s->h2w.state[s->h2w.draining] = B_EMPTY; s->h2w.draining = -1; s->h2w.partial = false; }
 	if (s->w2h.filling >= 0) { s->w2h.state[s->w2h.filling] = B_EMPTY; s->w2h.filling = -1; }
 	log_printf("bridge: slot %d unbound\n", sl);
+}
+
+void bridge_stats_reset(void)
+{
+	memset(&cyc_push, 0, sizeof cyc_push);
+	memset(&cyc_pull, 0, sizeof cyc_pull);
+	for (int i = 0; i < 2; i++) {
+		struct dir *ds[2] = { &slots[i].h2w, &slots[i].w2h };
+		for (int k = 0; k < 2; k++) {
+			struct dir *d = ds[k];
+			d->msgs = d->bytes = d->zlps = d->partials = 0;
+			d->hand_us = d->hand_n = d->drain_us = d->drain_n = d->fill_us = d->fill_n = 0;
+		}
+	}
 }
 
 bool bridge_host_pending(void)
@@ -439,13 +593,13 @@ void bridge_status(char *buf, unsigned n)
 	for (int i = 0; i < 2 && k < (int)n; i++) {
 		struct slot *s = &slots[i];
 		k += snprintf(buf + k, n - (unsigned)k,
-			"bridge%d=up:%d bound:%d chunk:%lu h2w:%lu/%lu zlp:%lu fill:%lu hand:%lu drain:%lu w2h:%lu/%lu zlp:%lu fill:%lu hand:%lu drain:%lu\n", i,
-			s->gadget_up, s->bound, (unsigned long)chunk,
-			(unsigned long)s->h2w.msgs, (unsigned long)s->h2w.bytes, (unsigned long)s->h2w.zlps,
+			"bridge%d=up:%d bound:%d chunk:%lu cut:%lu h2w:%lu/%lu zlp:%lu part:%lu fill:%lu hand:%lu drain:%lu w2h:%lu/%lu zlp:%lu part:%lu fill:%lu hand:%lu drain:%lu\n", i,
+			s->gadget_up, s->bound, (unsigned long)chunk, (unsigned long)cut_mask,
+			(unsigned long)s->h2w.msgs, (unsigned long)s->h2w.bytes, (unsigned long)s->h2w.zlps, (unsigned long)s->h2w.partials,
 			(unsigned long)(s->h2w.fill_n ? s->h2w.fill_us / s->h2w.fill_n : 0),
 			(unsigned long)(s->h2w.hand_n ? s->h2w.hand_us / s->h2w.hand_n : 0),
 			(unsigned long)(s->h2w.drain_n ? s->h2w.drain_us / s->h2w.drain_n : 0),
-			(unsigned long)s->w2h.msgs, (unsigned long)s->w2h.bytes, (unsigned long)s->w2h.zlps,
+			(unsigned long)s->w2h.msgs, (unsigned long)s->w2h.bytes, (unsigned long)s->w2h.zlps, (unsigned long)s->w2h.partials,
 			(unsigned long)(s->w2h.fill_n ? s->w2h.fill_us / s->w2h.fill_n : 0),
 			(unsigned long)(s->w2h.hand_n ? s->w2h.hand_us / s->w2h.hand_n : 0),
 			(unsigned long)(s->w2h.drain_n ? s->w2h.drain_us / s->w2h.drain_n : 0));
