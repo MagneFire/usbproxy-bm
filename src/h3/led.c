@@ -1,5 +1,5 @@
-/* Orange Pi Zero: green status LED on PA17, red power LED on PL10, both
- * active high. */
+/* Orange Pi Zero: red status LED on PA17, green power LED on PL10, both
+ * active high (the kernel DT: orangepi:red:status, orangepi:green:pwr). */
 #include "h3.h"
 
 void led_init(void)
@@ -12,12 +12,12 @@ void led_init(void)
 	writel(v, PIO_CFG(H3_R_PIO, 1));
 }
 
-void led_green(int on)
+void led_red(int on)
 {
 	if (on) setbits(PIO_DAT(PIO_PORT(0)), BIT(17)); else clrbits(PIO_DAT(PIO_PORT(0)), BIT(17));
 }
 
-void led_red(int on)
+void led_green(int on)
 {
 	if (on) setbits(PIO_DAT(H3_R_PIO), BIT(10)); else clrbits(PIO_DAT(H3_R_PIO), BIT(10));
 }

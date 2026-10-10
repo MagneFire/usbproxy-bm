@@ -61,7 +61,7 @@ int main(void)
 	gic_init();
 	timer_init();
 	led_init();
-	led_green(1);
+	led_red(1);
 	log_init();
 	log_printf("boot %lu: entry at %lu ms, gp0=%08lx gp1=%08lx gp2=%08lx gp3=%08lx wdt=%d\n",
 		   (unsigned long)log_boots(), (unsigned long)g_entry_ms,
@@ -102,7 +102,7 @@ int main(void)
 		uint32_t t = tick_count();
 		if (t - last_blink >= 500) {
 			last_blink = t;
-			led_green((t / 500) & 1);
+			led_red((t / 500) & 1);	/* red status LED: alive */
 		}
 		/* Sleep only when nothing is queued, decided with IRQs masked so an
 		 * event raised between the check and the wfi still wakes us (WFI
