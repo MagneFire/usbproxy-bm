@@ -76,7 +76,11 @@ void log_dump_at(uint32_t from, size_t n, void (*out)(const char *))
 {
 	if (!H || !n) return;
 	uint32_t avail = H->total < H->size ? H->total : H->size;
-	if (H->total - from > avail) { n -= (H->total - from) - avail; from = H->total - avail; }
+	if (H->total - from > avail) {		/* the oldest of the range is already overwritten */
+		uint32_t lost = (H->total - from) - avail;
+		if (lost >= n) return;
+		n -= lost; from = H->total - avail;
+	}
 	uint32_t pos = (H->head + H->size - (H->total - from)) % H->size;
 	char chunk[65];
 	while (n) {

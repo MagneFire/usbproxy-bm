@@ -7,18 +7,9 @@
 
 struct slot {
 	uint8_t ep_in, ep_out;
-	bool loopback;
-	bool in_busy;
 	struct slot_stats st;
-	CFG_TUSB_MEM_ALIGN uint8_t out_buf[512];
-	CFG_TUSB_MEM_ALIGN uint8_t in_buf[512];
 };
 static struct slot slots[SLOT_COUNT];
-
-static void arm_out(struct slot *s)
-{
-	usbd_edpt_xfer(0, s->ep_out, s->out_buf, sizeof s->out_buf, false);
-}
 
 static void slots_init(void) { memset(slots, 0, sizeof slots); }
 static bool slots_deinit(void) { return true; }
@@ -30,7 +21,6 @@ static void slots_reset(uint8_t rhport)
 		if (slots[i].st.open)
 			bridge_gadget_gone(i);
 		slots[i].st.open = false;
-		slots[i].in_busy = false;
 	}
 }
 
@@ -56,11 +46,7 @@ static uint16_t slots_open(uint8_t rhport, tusb_desc_interface_t const *itf, uin
 		p += sizeof(tusb_desc_endpoint_t);
 	}
 	s->st.open = true;
-	s->in_busy = false;
-	if (s->loopback)
-		arm_out(s);
-	else
-		bridge_gadget_ready(idx, s->ep_in, s->ep_out);
+	bridge_gadget_ready(idx, s->ep_in, s->ep_out);
 	log_printf("slot %d open: in %02x out %02x\n", idx, s->ep_in, s->ep_out);
 	return need;
 }
@@ -97,29 +83,13 @@ static bool slots_xfer(uint8_t rhport, uint8_t ep_addr, xfer_result_t result, ui
 			s->st.out_pkts++;
 			s->st.out_bytes += xferred;
 			if (xferred == 0) s->st.out_zlp++;
-			if (!s->loopback) {
-				bridge_gadget_out_done(i, result == XFER_RESULT_SUCCESS ? xferred : 0);
-				return true;
-			}
-			if (result != XFER_RESULT_SUCCESS) { arm_out(s); return true; }
-			if (s->loopback) {
-				/* ping-pong: echo this packet (ZLPs too), re-arm OUT when the IN is done */
-				memcpy(s->in_buf, s->out_buf, xferred);
-				s->in_busy = true;
-				usbd_edpt_xfer(0, s->ep_in, s->in_buf, (uint16_t)xferred, false);
-			} else {
-				arm_out(s);
-			}
+			bridge_gadget_out_done(i, result == XFER_RESULT_SUCCESS ? xferred : 0);
 			return true;
 		}
 		if (ep_addr == s->ep_in) {
 			s->st.in_pkts++;
 			s->st.in_bytes += xferred;
-			s->in_busy = false;
-			if (s->loopback)
-				arm_out(s);
-			else
-				bridge_gadget_in_done(i);
+			bridge_gadget_in_done(i);
 			return true;
 		}
 	}
@@ -129,7 +99,7 @@ static bool slots_xfer(uint8_t rhport, uint8_t ep_addr, xfer_result_t result, ui
 void dcd_h3_out_progress(uint8_t ep_addr, uint32_t received)
 {
 	for (int i = 0; i < SLOT_COUNT; i++)
-		if (slots[i].st.open && !slots[i].loopback && ep_addr == slots[i].ep_out) {
+		if (slots[i].st.open && ep_addr == slots[i].ep_out) {
 			bridge_gadget_out_progress(i, received);
 			return;
 		}
@@ -152,10 +122,4 @@ usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count)
 	return &slots_driver;
 }
 
-void slots_loopback(int slot, bool on)
-{
-	if (slot < 0 || slot >= SLOT_COUNT) return;
-	slots[slot].loopback = on;	/* takes effect at the next configuration */
-}
-bool slots_loopback_on(int slot) { return slot >= 0 && slot < SLOT_COUNT && slots[slot].loopback; }
 const struct slot_stats *slots_stats(int slot) { return &slots[slot].st; }

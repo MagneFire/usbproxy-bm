@@ -84,7 +84,6 @@ static void cmd_status(void)
 		(unsigned long)rtc_gp_read(0), (unsigned long)rtc_gp_read(1),
 		(unsigned long)rtc_gp_read(2), (unsigned long)rtc_gp_read(3), wdt_armed());
 	con_out(buf);
-	extern uint32_t g_represents;
 	snprintf(buf, sizeof buf, "usb_mounted=%d\nusb_speed=%s\nusb_suspended=%d\nusb_represented=%lu\ncdc_connected=%d\n",
 		tud_mounted(), tud_speed_get() == TUSB_SPEED_HIGH ? "high" : "full",
 		tud_suspended(), (unsigned long)g_represents, tud_cdc_connected());
@@ -120,8 +119,8 @@ static void cmd_status(void)
 	}
 	for (int i = 0; i < SLOT_COUNT; i++) {
 		const struct slot_stats *st = slots_stats(i);
-		snprintf(buf, sizeof buf, "slot%d=open:%d loop:%d out:%lu/%lu zlp:%lu in:%lu/%lu\n", i,
-			st->open, slots_loopback_on(i), (unsigned long)st->out_pkts,
+		snprintf(buf, sizeof buf, "slot%d=open:%d out:%lu/%lu zlp:%lu in:%lu/%lu\n", i,
+			st->open, (unsigned long)st->out_pkts,
 			(unsigned long)st->out_bytes, (unsigned long)st->out_zlp,
 			(unsigned long)st->in_pkts, (unsigned long)st->in_bytes);
 		con_out(buf);
@@ -148,7 +147,7 @@ static void run(char *s)
 	char buf[48];
 	if (!strcmp(c, "help")) {
 		con_out("status log [bytes] reboot uboot hang hangnext panic mem <addr> [words] "
-			"log [bytes|-f] gp <n> [val] led <g|r> <0|1> loop <slot> <0|1> detach attach hostxfer <in|out> <n> [slot]\n");
+			"log [bytes|-f] gp <n> [val] led <g|r> <0|1> detach attach hostxfer <in|out> <n> [slot]\n");
 	} else if (!strcmp(c, "status")) {
 		cmd_status();
 	} else if (!strcmp(c, "log") && argc > 1 && !strcmp(argv[1], "-f")) {
@@ -243,12 +242,12 @@ static void run(char *s)
 		if (argc > 1) bridge_set_cut(strtoul(argv[1], 0, 0));
 		snprintf(buf, sizeof buf, "cut=%lu\n", (unsigned long)bridge_cut());
 		con_out(buf);
-	} else if (!strcmp(c, "loop") && argc > 2) {
-		slots_loopback((int)strtoul(argv[1], 0, 0), argv[2][0] == '1');
 	} else if (!strcmp(c, "detach")) {
+		g_manual_detach = true;
 		tud_disconnect();
 		log_printf("usb: soft-disconnected\n");
 	} else if (!strcmp(c, "attach")) {
+		g_manual_detach = false;
 		tud_connect();
 		log_printf("usb: soft-connected\n");
 	} else {

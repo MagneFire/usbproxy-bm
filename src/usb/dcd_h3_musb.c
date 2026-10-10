@@ -1127,6 +1127,12 @@ static void process_bus_reset(uint8_t rhport)
   _dcd.status_out = 0;
   /* When pipe0.buf has not NULL, DATA stage works in progress. */
   _dcd.pipe0.buf = NULL;
+  /* H3: TinyUSB closes endpoints only on SET_CONFIGURATION, not here, so an
+   * armed inner DMA would survive the reset: still `active`, still aimed
+   * at the old buffer, and blocking the next arm (Codex review). */
+  for (unsigned ch = 0; ch < 2; ch++) if (dma_ch[ch].active) dma_stop(ch);
+  memset(_dcd.pipe, 0, sizeof _dcd.pipe);
+  _dcd.in_zlp_pending = 0;
 
   USBC_Writew(1, USBC_REG_INTTxE(USBC0_BASE)); /* Enable only EP0 */
   USBC_Writew(0, USBC_REG_INTRxE(USBC0_BASE));

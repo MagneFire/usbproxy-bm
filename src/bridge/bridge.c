@@ -528,7 +528,7 @@ static void w2h_fill(struct slot *s)
 	if (i < 0) return;
 	uint32_t want = BRIDGE_BUF;
 	if (s == &slots[0])
-		want = d->pending_payload ? d->pending_payload : ADB_HDR_LEN;
+		want = d->pending_payload ? TU_MIN(d->pending_payload, BRIDGE_BUF) : ADB_HDR_LEN;
 	else
 		/* fastboot: the host reads 64 bytes per response, so this slot
 		 * must never hand the Mac a piece bigger than one response. With
@@ -657,7 +657,7 @@ void bridge_watch_in_done(int sl, uint32_t len, int result)
 		} else if (len == ADB_HDR_LEN) {
 			uint32_t cmd, a0, a1, dl;
 			if (adb_parse_hdr(d->buf[i], &cmd, &a0, &a1, &dl))
-				d->pending_payload = dl > BRIDGE_BUF ? BRIDGE_BUF : dl;	/* legacy transport: maxdata 4096 */
+				d->pending_payload = dl;	/* read in BRIDGE_BUF pieces; legacy adbd never exceeds 4096 */
 			else
 				d->pending_payload = 0;		/* not adb framing: keep reading headers */
 		} else {
@@ -840,6 +840,11 @@ void bridge_unbind(int sl)
 	if (s == &slots[0])
 		for (int i = 0; i < BRIDGE_NBUF; i++)
 			if (s->h2w.state[i] == B_FULL) s->h2w.state[i] = B_EMPTY;
+	/* and what the gone device said that the host has not read yet must
+	 * not reach the host ahead of the next device's first message */
+	for (int i = 0; i < BRIDGE_NBUF; i++)
+		if (s->w2h.state[i] == B_FULL) s->w2h.state[i] = B_EMPTY;
+	s->w2h.pending_payload = 0;
 	/* adb: pulse a halt on IN so the host's pending read fails at once and
 	 * adb drops its transport (only the host sends CNXN; a stale transport
 	 * would never see the next device), then back to NAK. IN only: halting
