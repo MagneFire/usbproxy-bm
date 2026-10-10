@@ -76,6 +76,18 @@ reset:
         strlo   r2, [r0], #4
         blo     2b
 
+        /* .dma (uncached pools: EHCI queue heads/qTDs, TinyUSB buffers) is
+         * NOLOAD too and C code assumes it starts zeroed. On a cold
+         * power-on it held DRAM noise: a garbage queue head carried an
+         * attached-qTD pointer of 0x60190000 and the first EHCI poll took
+         * a data abort on invalidating it (seen 2026-10-10 18:01; warm
+         * boots were fine because DRAM kept the previous image). */
+        ldr     r0, =__dma_start
+        ldr     r1, =__dma_end
+4:      cmp     r0, r1
+        strlo   r2, [r0], #4
+        blo     4b
+
         ldr     r0, =24000000
         mcr     p15, 0, r0, c14, c0, 0          /* CNTFRQ */
 
