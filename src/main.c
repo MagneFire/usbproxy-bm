@@ -8,6 +8,36 @@
 uint32_t g_entry_ms;
 int g_up;
 
+/* Progress-gated watchdog: once a watch is bound, both USB cores must keep
+ * their frame counters moving (musb FRNUM while the Mac keeps the bus
+ * awake, EHCI FRINDEX always); if either is stuck for 2 s the main loop
+ * stops feeding the watchdog and the board resets 8 s later with a fault
+ * record. Console `hangusb` halts the EHCI to prove it. */
+#define USBC_FRNUM      (0x01c19000u + 0x54)
+#define EHCI1_FRINDEX   (0x01c1b010u + 0x0c)
+static bool usb_progress_ok(void)
+{
+	static uint32_t last_check, last_frnum, last_frindex, stuck_since;
+	static bool lost;
+	uint32_t now = time_ms();
+	if (lost) return false;
+	if ((int32_t)(now - last_check) < 250) return true;
+	last_check = now;
+	bool bound = host_daddr() != 0;
+	uint32_t fr = readl(USBC_FRNUM) & 0x7ff, fi = readl(EHCI1_FRINDEX);
+	bool musb_ok = !tud_mounted() || tud_suspended() || fr != last_frnum;
+	bool ehci_ok = fi != last_frindex;
+	last_frnum = fr; last_frindex = fi;
+	if (!bound || (musb_ok && ehci_ok)) { stuck_since = 0; return true; }
+	if (!stuck_since) stuck_since = now;
+	if ((int32_t)(now - stuck_since) < 2000) return true;
+	lost = true;
+	log_printf("watchdog: usb progress lost (musb %s, ehci %s); letting the watchdog fire\n",
+		   musb_ok ? "ok" : "stuck", ehci_ok ? "ok" : "stuck");
+	log_set_fault(musb_ok ? "ehci frame counter stuck" : "musb frame counter stuck");
+	return false;
+}
+
 int main(void)
 {
 	g_entry_ms = time_ms();         /* CNTPCT runs from power-on */
@@ -55,7 +85,8 @@ int main(void)
 		tuh_task();
 		host_mgr_poll();
 		console_poll();
-		wdt_feed();
+		if (usb_progress_ok())
+			wdt_feed();
 		uint32_t t = tick_count();
 		if (t - last_blink >= 500) {
 			last_blink = t;

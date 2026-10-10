@@ -199,6 +199,10 @@ static void run(char *s)
 		con_out(buf);
 	} else if (!strcmp(c, "zero")) {
 		bridge_stats_reset();
+	} else if (!strcmp(c, "hangusb")) {
+		/* halt the EHCI: FRINDEX stops, the progress gate must reset the board */
+		clrbits(0x01c1b010u, 1u);
+		con_out("ehci halted; expect a watchdog reset in ~10 s\n");
 	} else if (!strcmp(c, "hostcycle")) {
 		host_cycle_start(argc > 1 ? (unsigned)strtoul(argv[1], 0, 0) : 1);
 	} else if (!strcmp(c, "cutfloor")) {
