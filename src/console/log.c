@@ -2,6 +2,7 @@
  * A versioned header makes a warm reset keep the previous boot's tail and a
  * fault record; a cold start (or a different firmware) re-initialises it.
  * Every line also goes to the UART. */
+#include <stdbool.h>
 #include <string.h>
 #include "fw.h"
 
@@ -18,6 +19,8 @@ extern char __logring_start[], __logring_end[];
 static volatile struct hdr *H;
 static volatile char *D;
 static uint32_t boots_now;
+static char prev_fault[64];
+static bool prev_fault_valid, cur_fault_valid;
 
 void log_init(void)
 {
@@ -31,6 +34,15 @@ void log_init(void)
 	}
 	H->boots++;
 	boots_now = H->boots;
+	/* A fault record is for the boot that follows it: keep a copy for this
+	 * boot's status/log, clear the ring's so the next clean boot is clean. */
+	if (H->fault_valid) {
+		size_t n = 0;
+		while (n < sizeof prev_fault - 1 && H->fault[n]) { prev_fault[n] = H->fault[n]; n++; }
+		prev_fault[n] = 0;
+		prev_fault_valid = true;
+		H->fault_valid = 0;
+	}
 }
 
 void log_write(const char *s, size_t n)
@@ -83,11 +95,14 @@ void log_set_fault(const char *s)
 	for (size_t i = 0; i < n; i++) H->fault[i] = s[i];
 	H->fault[n] = 0;
 	H->fault_valid = 1;
+	cur_fault_valid = true;
 }
 
+/* this boot's own fault if one was recorded, else the previous boot's */
 const char *log_fault(void)
 {
-	return (H && H->fault_valid) ? (const char *)H->fault : NULL;
+	if (H && cur_fault_valid) return (const char *)H->fault;
+	return prev_fault_valid ? prev_fault : NULL;
 }
 
 uint32_t log_boots(void) { return boots_now; }
