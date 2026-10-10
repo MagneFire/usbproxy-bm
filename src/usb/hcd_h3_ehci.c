@@ -69,6 +69,14 @@ static void ehci_irq(void)
 }
 uint32_t hcd_h3_isr_count(void) { return isr_count; }
 
+void ehci_h3_poll_async(uint8_t rhport);
+void hcd_h3_poll(void)
+{
+	gic_mask(IRQ_EHCI1);
+	ehci_h3_poll_async(1);
+	gic_unmask(IRQ_EHCI1);
+}
+
 bool hcd_init(uint8_t rhport, const tusb_rhport_init_t *rh_init)
 {
 	(void)rh_init;

@@ -73,11 +73,17 @@ static void cmd_status(void)
 		tud_suspended(), tud_cdc_connected());
 	con_out(buf);
 	{
-		extern void dcd_h3_dpb_stats(uint32_t *, uint32_t *, uint32_t *);
-		uint32_t w, e, x;
-		dcd_h3_dpb_stats(&w, &e, &x);
-		snprintf(buf, sizeof buf, "musb_dpb=tx_waits:%lu tx_early:%lu rx_extra:%lu\n",
-			 (unsigned long)w, (unsigned long)e, (unsigned long)x);
+		extern void dcd_h3_dpb_stats(uint32_t *, uint32_t *, uint32_t *, uint32_t *);
+		uint32_t w, e, x, b;
+		dcd_h3_dpb_stats(&w, &e, &x, &b);
+		snprintf(buf, sizeof buf, "musb_dpb=tx_waits:%lu tx_early:%lu rx_extra:%lu tx_busy_irqs:%lu\n",
+			 (unsigned long)w, (unsigned long)e, (unsigned long)x, (unsigned long)b);
+		con_out(buf);
+		extern void dcd_h3_fifo_stats(uint32_t *, uint32_t *, uint32_t *, uint32_t *);
+		uint32_t rd, rdn, wr, wrn;
+		dcd_h3_fifo_stats(&rd, &rdn, &wr, &wrn);
+		snprintf(buf, sizeof buf, "musb_fifo_us_x10=rd:%lu (n %lu) wr:%lu (n %lu)\n",
+			 (unsigned long)rd, (unsigned long)rdn, (unsigned long)wr, (unsigned long)wrn);
 		con_out(buf);
 	}
 	for (int i = 0; i < SLOT_COUNT; i++) {
@@ -90,8 +96,11 @@ static void cmd_status(void)
 	}
 	host_status_line(buf, sizeof buf);
 	con_out(buf);
-	bridge_status(buf, sizeof buf);
-	con_out(buf);
+	{
+		static char bbuf[640];		/* two cycle lines + two bridge lines */
+		bridge_status(bbuf, sizeof bbuf);
+		con_out(bbuf);
+	}
 	snprintf(buf, sizeof buf, "fault=%s\n", log_fault() ? log_fault() : "none");
 	con_out(buf);
 }

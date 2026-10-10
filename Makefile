@@ -43,16 +43,13 @@ LDFLAGS := -nostdlib -T ld/fw.ld -Wl,--gc-sections -Wl,--no-warn-rwx-segments -W
 
 all: $(BUILD)/fw.bin size
 
-# The build id lives in a generated header (rewritten only when it changes)
-# so the objects that print it are rebuilt when the tree moves. A -D on the
-# command line left stale "a849d72+" strings in a newer binary once.
-.PHONY: gitrev
-gitrev:
-	@mkdir -p $(BUILD)
-	@echo '#define GITREV "$(GITREV)$(DIRTY)"' > $(BUILD)/gitrev.h.tmp
-	@cmp -s $(BUILD)/gitrev.h.tmp $(BUILD)/gitrev.h || mv $(BUILD)/gitrev.h.tmp $(BUILD)/gitrev.h
-	@rm -f $(BUILD)/gitrev.h.tmp
-$(BUILD)/gitrev.h: gitrev
+# The build id lives in a generated header, rewritten at parse time only when
+# it changes, so the objects that print it rebuild when the tree moves (a -D
+# on the command line left stale "a849d72+" strings in a newer binary once;
+# a phony-driven rule for the header never retriggered under Apple's make).
+GITREV_H := $(shell mkdir -p $(BUILD); echo '\#define GITREV "$(GITREV)$(DIRTY)"' > $(BUILD)/gitrev.h.tmp; \
+            cmp -s $(BUILD)/gitrev.h.tmp $(BUILD)/gitrev.h || mv -f $(BUILD)/gitrev.h.tmp $(BUILD)/gitrev.h; \
+            rm -f $(BUILD)/gitrev.h.tmp; echo $(BUILD)/gitrev.h)
 
 $(BUILD)/%.c.o: %.c $(BUILD)/gitrev.h
 	@mkdir -p $(dir $@)

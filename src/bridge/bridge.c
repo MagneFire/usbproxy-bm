@@ -6,6 +6,9 @@
 #include "bridge/adb_proto.h"
 
 enum { B_EMPTY = 0, B_FILLING, B_FULL, B_DRAINING };
+enum { TAG_NONE = 0, TAG_PAY_LAST, TAG_OKAY };	/* cycle stamps, see cyc_* */
+#define A_WRTE 0x45545257u
+#define A_OKAY 0x59414b4fu
 
 struct dir {
 	/* Cached RAM, not the uncached .dma section: the musb side moves these
@@ -17,6 +20,7 @@ struct dir {
 	uint32_t len[BRIDGE_NBUF];
 	uint8_t state[BRIDGE_NBUF];
 	uint32_t seq[BRIDGE_NBUF];	/* fill order */
+	uint8_t tag[BRIDGE_NBUF];	/* what the buffer holds, for the cycle stamps */
 	uint32_t next_seq;
 	int filling, draining;		/* buffer index or -1 */
 	uint32_t msgs, bytes, zlps;
@@ -39,7 +43,7 @@ struct slot {
 };
 
 static struct slot slots[2];
-static uint32_t chunk = BRIDGE_BUF;
+static uint32_t chunk = 2048;	/* measured best (BARE-METAL.md 8b, M3 optimisation): 4096 store-and-forwards, 1024/512 pay per-transfer gaps */
 
 void bridge_set_chunk(uint32_t bytes)
 {
@@ -48,6 +52,126 @@ void bridge_set_chunk(uint32_t bytes)
 	chunk = bytes & ~511u;
 }
 uint32_t bridge_chunk(void) { return chunk; }
+
+/* WRTE->OKAY cycle stamps on the adb slot (BARE-METAL.md M3 gate). One
+ * tracker per direction of the WRTE: "push" = WRTE from the Mac, "pull" =
+ * WRTE from the watch. adb keeps more than one WRTE in flight, so each
+ * tracker holds a ring of outstanding messages and OKAYs retire them in
+ * order. Phases: header seen -> last payload chunk in -> payload delivered
+ * -> OKAY seen from the far side -> OKAY delivered. Means in us. */
+#define CYC_RING 8
+struct cyc_rec { uint32_t t_hdr, t_pay, t_sent, t_okay; uint32_t pay_left; bool paid, sent, okayed; };
+struct cyc {
+	struct cyc_rec r[CYC_RING];
+	unsigned head, tail;		/* tail = oldest outstanding, head = next free */
+	uint32_t sum[6], n, depth_sum, depth_n, dropped;
+	uint32_t t_last_hdr;
+};
+static struct cyc cyc_push, cyc_pull;
+
+static unsigned cyc_count(struct cyc *c) { return c->head - c->tail; }
+
+static void cyc_hdr(struct cyc *c, uint32_t dl, uint32_t now)
+{
+	c->depth_sum += cyc_count(c); c->depth_n++;
+	if (c->t_last_hdr) { c->sum[5] += now - c->t_last_hdr; }
+	c->t_last_hdr = now;
+	if (cyc_count(c) == CYC_RING) { c->tail++; c->dropped++; }
+	struct cyc_rec *r = &c->r[c->head++ % CYC_RING];
+	memset(r, 0, sizeof *r);
+	r->t_hdr = now; r->pay_left = dl;
+}
+
+/* the newest record still waiting for payload */
+static struct cyc_rec *cyc_paying(struct cyc *c)
+{
+	for (unsigned i = c->tail; i != c->head; i++) {
+		struct cyc_rec *r = &c->r[i % CYC_RING];
+		if (!r->paid) return r;
+	}
+	return 0;
+}
+static struct cyc_rec *cyc_oldest_unsent(struct cyc *c)
+{
+	for (unsigned i = c->tail; i != c->head; i++) {
+		struct cyc_rec *r = &c->r[i % CYC_RING];
+		if (r->paid && !r->sent) return r;
+	}
+	return 0;
+}
+static struct cyc_rec *cyc_oldest_unokayed(struct cyc *c)
+{
+	for (unsigned i = c->tail; i != c->head; i++) {
+		struct cyc_rec *r = &c->r[i % CYC_RING];
+		if (!r->okayed) return r;
+	}
+	return 0;
+}
+
+static void cyc_retire(struct cyc *c, uint32_t t_fwd)
+{
+	if (cyc_count(c) == 0) return;
+	struct cyc_rec *r = &c->r[c->tail % CYC_RING];
+	if (!r->okayed) return;
+	c->tail++;
+	if (!r->paid || !r->sent) return;
+	c->sum[0] += r->t_pay - r->t_hdr;
+	c->sum[1] += r->t_sent - r->t_pay;
+	c->sum[2] += r->t_okay - r->t_sent;
+	c->sum[3] += t_fwd - r->t_okay;
+	c->sum[4] += r->t_okay - r->t_hdr;	/* RTT as seen here */
+	c->n++;
+}
+
+/* A buffer just filled on direction d of slot 0 (h2w: from the Mac). */
+static void cyc_fill_done(bool h2w, struct dir *d, int i, uint32_t len, uint32_t now)
+{
+	struct cyc *mine = h2w ? &cyc_push : &cyc_pull;	/* WRTEs arriving on this side */
+	struct cyc *other = h2w ? &cyc_pull : &cyc_push;	/* OKAYs arriving on this side */
+	uint32_t cmd, a0, a1, dl;
+	d->tag[i] = TAG_NONE;
+	if (len == ADB_HDR_LEN && adb_parse_hdr(d->buf[i], &cmd, &a0, &a1, &dl)) {
+		if (cmd == A_WRTE && dl) {
+			cyc_hdr(mine, dl, now);
+		} else if (cmd == A_OKAY) {
+			struct cyc_rec *r = cyc_oldest_unokayed(other);
+			if (r) {
+				if (!r->paid) { r->paid = true; r->t_pay = now; }
+				if (!r->sent) { r->sent = true; r->t_sent = now; }
+				r->okayed = true; r->t_okay = now;
+				d->tag[i] = TAG_OKAY;
+			}
+		}
+		return;
+	}
+	struct cyc_rec *r = cyc_paying(mine);
+	if (r) {
+		r->pay_left -= len < r->pay_left ? len : r->pay_left;
+		if (!r->pay_left) { r->paid = true; r->t_pay = now; d->tag[i] = TAG_PAY_LAST; }
+	}
+}
+
+static void cyc_drain_done(bool h2w, struct dir *d, int i, uint32_t now)
+{
+	struct cyc *mine = h2w ? &cyc_push : &cyc_pull;
+	struct cyc *other = h2w ? &cyc_pull : &cyc_push;
+	if (d->tag[i] == TAG_PAY_LAST) {
+		struct cyc_rec *r = cyc_oldest_unsent(mine);
+		if (r) { r->sent = true; r->t_sent = now; }
+	} else if (d->tag[i] == TAG_OKAY) {
+		cyc_retire(other, now);
+	}
+	d->tag[i] = TAG_NONE;
+}
+
+static int cyc_status(const char *name, struct cyc *c, char *buf, unsigned n)
+{
+	uint32_t k = c->n ? c->n : 1, dn = c->depth_n ? c->depth_n : 1;
+	return snprintf(buf, n, "cycle_%s=n:%lu hdr>pay:%lu pay>sent:%lu sent>okay:%lu okay>fwd:%lu rtt:%lu hdr>hdr:%lu inflight_x10:%lu dropped:%lu\n",
+			name, (unsigned long)c->n, (unsigned long)(c->sum[0] / k), (unsigned long)(c->sum[1] / k),
+			(unsigned long)(c->sum[2] / k), (unsigned long)(c->sum[3] / k), (unsigned long)(c->sum[4] / k),
+			(unsigned long)(c->sum[5] / dn), (unsigned long)(c->depth_sum * 10 / dn), (unsigned long)c->dropped);
+}
 
 static int oldest_full(struct dir *d)
 {
@@ -118,6 +242,7 @@ void bridge_gadget_out_done(int sl, uint32_t len)
 	}
 	d->len[i] = len; d->state[i] = B_FULL; d->seq[i] = d->next_seq++;
 	d->t_fill_done = time_us();
+	if (s == &slots[0]) cyc_fill_done(true, d, i, len, d->t_fill_done);
 	h2w_drain(s);
 	h2w_fill(s);
 }
@@ -134,9 +259,11 @@ void bridge_watch_out_done(int sl, uint32_t len, int result)
 	int i = d->draining;
 	if (i < 0) return;
 	d->draining = -1;
-	d->drain_us += time_us() - d->t_drain_sub; d->drain_n++;
+	uint32_t now = time_us();
+	d->drain_us += now - d->t_drain_sub; d->drain_n++;
 	if (result != XFER_RESULT_SUCCESS)
 		log_printf("bridge: slot %d watch OUT result %d (%lu/%lu)\n", sl, result, (unsigned long)len, (unsigned long)d->len[i]);
+	if (s == &slots[0]) cyc_drain_done(true, d, i, now);
 	d->state[i] = B_EMPTY;
 	h2w_drain(s);
 	h2w_fill(s);
@@ -221,6 +348,7 @@ void bridge_watch_in_done(int sl, uint32_t len, int result)
 	d->len[i] = len; d->state[i] = B_FULL; d->seq[i] = d->next_seq++;
 	d->msgs++; d->bytes += len; if (!len) d->zlps++;
 	d->t_fill_done = time_us();
+	if (s == &slots[0]) cyc_fill_done(false, d, i, len, d->t_fill_done);
 	w2h_drain(s);
 	w2h_fill(s);
 }
@@ -232,7 +360,9 @@ void bridge_gadget_in_done(int sl)
 	int i = d->draining;
 	if (i < 0) return;
 	d->draining = -1;
-	d->drain_us += time_us() - d->t_drain_sub; d->drain_n++;
+	uint32_t now = time_us();
+	d->drain_us += now - d->t_drain_sub; d->drain_n++;
+	if (s == &slots[0]) cyc_drain_done(false, d, i, now);
 	d->state[i] = B_EMPTY;
 	w2h_drain(s);
 	w2h_fill(s);
@@ -294,9 +424,18 @@ void bridge_unbind(int sl)
 	log_printf("bridge: slot %d unbound\n", sl);
 }
 
+bool bridge_host_pending(void)
+{
+	for (int i = 0; i < 2; i++)
+		if (slots[i].h2w.draining >= 0 || slots[i].w2h.filling >= 0) return true;
+	return false;
+}
+
 void bridge_status(char *buf, unsigned n)
 {
 	int k = 0;
+	k += cyc_status("push", &cyc_push, buf + k, n - (unsigned)k);
+	k += cyc_status("pull", &cyc_pull, buf + k, n - (unsigned)k);
 	for (int i = 0; i < 2 && k < (int)n; i++) {
 		struct slot *s = &slots[i];
 		k += snprintf(buf + k, n - (unsigned)k,

@@ -32,6 +32,7 @@
  */
 
 #include <stdint.h>
+#include "fw.h"
 #include "tusb_option.h"
 
 #if CFG_TUD_ENABLED && CFG_TUSB_MCU == OPT_MCU_NONE   /* H3 fork */
@@ -70,7 +71,8 @@ typedef struct
   pipe_state_t pipe[2][7];   /* pipe[direction][endpoint number - 1] */
   uint16_t     pipe_buf_is_fifo[2]; /* Bitmap. Each bit means whether 1:TU_FIFO or 0:POD. */
   uint16_t     dpb_in;              /* H3: IN endpoints with double packet buffering */
-  uint32_t     dpb_tx_waits, dpb_tx_early, dpb_rx_extra; /* H3 DPB counters (console status) */
+  uint32_t     dpb_tx_waits, dpb_tx_early, dpb_rx_extra, tx_busy_irqs; /* H3 DPB counters (console status) */
+  uint32_t     fifo_rd_us, fifo_rd_n, fifo_wr_us, fifo_wr_n;            /* PIO copy cost, packets >= 256 B */
   uint16_t     in_zlp_pending;      /* H3: bitmap, a zero-length IN transfer still to be sent */
 } dcd_data_t;
 
@@ -303,7 +305,7 @@ static void __USBC_Dev_Tx_WriteDataComplete(void)
 	USBC_Writeb((1 << USBC_BP_TXCSR_D_TX_READY), USBC_REG_TXCSR(USBC0_BASE));
 }
 
-static void __USBC_Dev_Rx_ReadDataComplete(void)
+__attribute__((unused)) static void __USBC_Dev_Rx_ReadDataComplete(void)
 {
 	USBC_Writeb(0, USBC_REG_RXCSR(USBC0_BASE));
 }
@@ -311,6 +313,23 @@ static void __USBC_Dev_Rx_ReadDataComplete(void)
 static u32 __USBC_Dev_Rx_IsReadDataReady(void)
 {
 	return USBC_REG_test_bit_w(USBC_BP_RXCSR_D_RX_PKT_READY, USBC_REG_RXCSR(USBC0_BASE));
+}
+
+/* H3 DPB: release the packet just read and tell whether the other buffer
+ * already holds the next one. FIFOFULL (both buffers occupied) is sampled
+ * before the release because RXPKTRDY takes a few cycles to re-assert for
+ * the second packet, and its interrupt flag may have been folded into the
+ * one we are servicing: a plain RXPKTRDY check right after the release read
+ * 0 and left the packet stranded (OUT flood stalled in loopback). */
+static bool rx_more;
+static void __USBC_Dev_Rx_Release(void)
+{
+	bool full = USBC_REG_test_bit_w(USBC_BP_RXCSR_D_FIFO_FULL, USBC_REG_RXCSR(USBC0_BASE));
+	USBC_Writeb(0, USBC_REG_RXCSR(USBC0_BASE));
+	if (full)
+		for (int i = 0; i < 200 && !__USBC_Dev_Rx_IsReadDataReady(); i++)
+			;
+	rx_more = __USBC_Dev_Rx_IsReadDataReady();
 }
 
 /* open a tx ep's interrupt */
@@ -411,7 +430,7 @@ static inline void print_block_list(free_block_t const *blk, unsigned num)
 
 #define USB_FIFO_SIZE_KB 8   /* H3: ram_bits 11 (Linux sunxi.c) */
 
-static unsigned find_free_memory(uint_fast16_t size_in_log2_minus3)
+__attribute__((unused)) static unsigned find_free_memory(uint_fast16_t size_in_log2_minus3)
 {
   free_block_t free_blocks[2 * (TUP_DCD_ENDPOINT_MAX - 1)];
   unsigned num_blocks = 1;
@@ -592,6 +611,14 @@ static bool handle_xfer_in(uint_fast8_t ep_addr)
     return true;
   }
 
+  /* Never load the FIFO while TXPKTRDY is set (both DPB buffers full, or
+   * the single buffer still pending): the write would land on top of a
+   * packet waiting to go out. Linux's txstate() has the same guard. The
+   * interrupt that frees the buffer brings us back. */
+  if (USBC_REG_test_bit_w(USBC_BP_TXCSR_D_TX_READY, USBC_REG_TXCSR(USBC0_BASE))) {
+    _dcd.tx_busy_irqs++;
+    return false;
+  }
   const unsigned mps = USBC_Readw(USBC_REG_TXMAXP(USBC0_BASE));
   const unsigned len = TU_MIN(mps, rem);
   uint8_t          *buf = pipe->buf;
@@ -601,7 +628,9 @@ static bool handle_xfer_in(uint_fast8_t ep_addr)
     if (_dcd.pipe_buf_is_fifo[TUSB_DIR_IN] & TU_BIT(epnum_minus1)) {
       pipe_read_write_packet_ff((tu_fifo_t *)(uintptr_t) buf, addr, len, TUSB_DIR_IN);
     } else {
+      uint32_t t0 = time_us();
       pipe_write_packet(buf, addr, len);
+      if (len >= 256) { _dcd.fifo_wr_us += time_us() - t0; _dcd.fifo_wr_n++; }
       pipe->buf       = buf + len;
     }
     pipe->remaining = rem - len;
@@ -636,7 +665,9 @@ static bool handle_xfer_out(uint_fast8_t ep_addr)
     if (_dcd.pipe_buf_is_fifo[TUSB_DIR_OUT] & TU_BIT(epnum_minus1)) {
       pipe_read_write_packet_ff((tu_fifo_t *)(uintptr_t )buf, addr, len, TUSB_DIR_OUT);
     } else {
+      uint32_t t0 = time_us();
       pipe_read_packet(buf, addr, len);
+      if (len >= 256) { _dcd.fifo_rd_us += time_us() - t0; _dcd.fifo_rd_n++; }
       pipe->buf       = buf + len;
     }
     pipe->remaining = rem - len;
@@ -645,7 +676,7 @@ static bool handle_xfer_out(uint_fast8_t ep_addr)
     pipe->buf = NULL;
     return NULL != buf;
   }
-  __USBC_Dev_Rx_ReadDataComplete();
+  __USBC_Dev_Rx_Release();
   return false;
 }
 
@@ -672,9 +703,9 @@ static bool edpt_n_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t *buffer, uint16
       /* Release the packet the previous transfer left as back-pressure. With
        * DPB the next one may be waiting behind it: take it now, its interrupt
        * came and went while nothing was armed. */
-      __USBC_Dev_Rx_ReadDataComplete();
+      __USBC_Dev_Rx_Release();
       bool completed = false;
-      while (!completed && pipe->buf && __USBC_Dev_Rx_IsReadDataReady()) {
+      while (!completed && pipe->buf && rx_more) {
         _dcd.dpb_rx_extra++;
         completed = handle_xfer_out(ep_addr);
       }
@@ -861,7 +892,7 @@ static void process_edpt_n(uint8_t rhport, uint_fast8_t ep_addr)
     completed = handle_xfer_out(ep_addr);
     /* Only while a transfer is armed: with none, RXPKTRDY stays set on
      * purpose (back-pressure) and this loop would never end. */
-    while (!completed && _dcd.pipe[TUSB_DIR_OUT][epn - 1].buf && __USBC_Dev_Rx_IsReadDataReady()) {
+    while (!completed && _dcd.pipe[TUSB_DIR_OUT][epn - 1].buf && rx_more) {
       _dcd.dpb_rx_extra++;
       completed = handle_xfer_out(ep_addr);
     }
@@ -894,9 +925,16 @@ static void process_bus_reset(uint8_t rhport)
  * Device API
  *------------------------------------------------------------------*/
 
-void dcd_h3_dpb_stats(uint32_t *tx_waits, uint32_t *tx_early, uint32_t *rx_extra)
+void dcd_h3_dpb_stats(uint32_t *tx_waits, uint32_t *tx_early, uint32_t *rx_extra, uint32_t *tx_busy)
 {
-  *tx_waits = _dcd.dpb_tx_waits; *tx_early = _dcd.dpb_tx_early; *rx_extra = _dcd.dpb_rx_extra;
+  *tx_waits = _dcd.dpb_tx_waits; *tx_early = _dcd.dpb_tx_early; *rx_extra = _dcd.dpb_rx_extra; *tx_busy = _dcd.tx_busy_irqs;
+}
+/* mean us per >=256-byte packet copied from / to the FIFO by PIO */
+void dcd_h3_fifo_stats(uint32_t *rd_us_x10, uint32_t *rd_n, uint32_t *wr_us_x10, uint32_t *wr_n)
+{
+  *rd_n = _dcd.fifo_rd_n; *wr_n = _dcd.fifo_wr_n;
+  *rd_us_x10 = _dcd.fifo_rd_n ? _dcd.fifo_rd_us * 10 / _dcd.fifo_rd_n : 0;
+  *wr_us_x10 = _dcd.fifo_wr_n ? _dcd.fifo_wr_us * 10 / _dcd.fifo_wr_n : 0;
 }
 
 static void usb_isr_handler(void) {

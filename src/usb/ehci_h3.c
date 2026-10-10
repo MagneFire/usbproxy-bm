@@ -671,8 +671,14 @@ void qhd_xfer_complete_isr(ehci_qhd_t * qhd) {
   hcd_dcache_invalidate(qhd, sizeof(ehci_qhd_t)); // HC may have updated the overlay
   volatile ehci_qtd_t *qtd_overlay = &qhd->qtd_overlay;
 
-  // process non-active (completed) QHD with attached (scheduled) TD
-  if ( !qtd_overlay->active && qhd->attached_qtd != NULL ) {
+  // process non-active (completed) QHD with attached (scheduled) TD.
+  // H3: also require the qTD itself to be retired. Between qhd_attach_qtd()
+  // and the HC's advance-queue the overlay still shows the previous
+  // transfer's Active=0, and this check (from the main-loop poll, or from an
+  // IRQ for another endpoint) would complete a transfer that never ran.
+  ehci_qtd_t * volatile attached = qhd->attached_qtd;
+  if ( attached != NULL ) hcd_dcache_invalidate(attached, sizeof(ehci_qtd_t));
+  if ( !qtd_overlay->active && attached != NULL && !attached->active ) {
     xfer_result_t xfer_result;
 
     if ( qtd_overlay->halted ) {
@@ -751,6 +757,15 @@ void process_period_xfer_isr(uint8_t rhport, uint32_t interval_ms) {
 
     next_link = *list_next(&next_link);
   }
+}
+
+/* H3: completion polling. The Interrupt Threshold Control cannot go below
+ * one microframe, so the completion IRQ lands up to 125 us after the HC
+ * retired the qTD; the overlay's Active bit is current at once. The main
+ * loop calls this (EHCI IRQ masked by the caller) while transfers are in
+ * flight; the IRQ that follows finds nothing left to do. */
+void ehci_h3_poll_async(uint8_t rhport) {
+  proccess_async_xfer_isr(list_get_async_head(rhport));
 }
 
 //------------- Host Controller Driver's Interrupt Handler -------------//

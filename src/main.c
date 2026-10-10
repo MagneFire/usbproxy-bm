@@ -61,6 +61,16 @@ int main(void)
 			last_blink = t;
 			led_green((t / 500) & 1);
 		}
-		wfi();
+		/* Sleep only when nothing is queued, decided with IRQs masked so an
+		 * event raised between the check and the wfi still wakes us (WFI
+		 * wakes on a pending IRQ regardless of CPSR.I). An unconditional
+		 * wfi here parked every completion that arrived during the task
+		 * pass until the next interrupt, up to one SOF period (125 us). */
+		extern void hcd_h3_poll(void);
+		hcd_h3_poll();
+		__asm__ volatile("cpsid i" ::: "memory");
+		if (!tud_task_event_ready() && !tuh_task_event_ready() && !bridge_host_pending())
+			wfi();
+		__asm__ volatile("cpsie i" ::: "memory");
 	}
 }

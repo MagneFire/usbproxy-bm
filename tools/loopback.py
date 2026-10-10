@@ -41,7 +41,8 @@ def main():
     ap.add_argument("--packets", type=int, default=20000)
     ap.add_argument("--size", type=int, default=512)
     ap.add_argument("--timeout", type=int, default=2000)
-    ap.add_argument("--flood-mb", type=int, default=8)
+    ap.add_argument("--flood-mb", type=int, default=0,
+                    help="OUT flood with loop off; needs the idle sink (M4a): with the M3 bridge the 4 buffers fill and the write stalls")
     args = ap.parse_args()
 
     console("loop 0 1", args.serial)
@@ -101,6 +102,10 @@ def main():
     time.sleep(0.2)
     before = console("status", args.serial)
     chunk = os.urandom(64 * 1024)
+    if not args.flood_mb:
+        usb.util.release_interface(dev, itf.bInterfaceNumber)
+        console("loop 0 0", args.serial)
+        return
     n_chunks = args.flood_mb * 16
     t0 = time.time()
     for _ in range(n_chunks):
