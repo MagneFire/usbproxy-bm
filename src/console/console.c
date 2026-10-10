@@ -18,21 +18,35 @@ struct con {
 	int len;
 };
 
-static void cdc_puts(const char *s)
+static bool cdc_write_all(const char *s, size_t n, uint32_t deadline)
 {
-	if (!tud_cdc_connected())
-		return;
-	size_t n = strlen(s);
-	uint32_t deadline = time_ms() + 200;
 	while (n) {
 		uint32_t w = tud_cdc_write(s, n);
 		s += w; n -= w;
 		tud_cdc_write_flush();
 		if (!w) {
 			if ((int32_t)(time_ms() - deadline) > 0)
-				return;		/* host not reading; drop the rest */
+				return false;	/* host not reading; drop the rest */
 			tud_task();
 		}
+	}
+	return true;
+}
+
+/* Like the UART, the CDC console speaks CRLF: terminal programs show a
+ * bare LF as a staircase. */
+static void cdc_puts(const char *s)
+{
+	if (!tud_cdc_connected())
+		return;
+	uint32_t deadline = time_ms() + 200;
+	while (*s) {
+		const char *nl = strchr(s, '\n');
+		size_t n = nl ? (size_t)(nl - s) : strlen(s);
+		if (n && !cdc_write_all(s, n, deadline)) return;
+		if (!nl) return;
+		if (!cdc_write_all("\r\n", 2, deadline)) return;
+		s = nl + 1;
 	}
 }
 
