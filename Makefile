@@ -97,6 +97,16 @@ fel: $(BUILD)/fw.bin
 	$(SUNXI_FEL) -p write $(LOAD) $(BUILD)/fw.bin
 	$(SUNXI_FEL) exe $(LOAD)
 
+# Leave FEL without touching the board: a 24-byte blob that arms the H3
+# watchdog for a whole-system reset (the card boots normally after it).
+$(BUILD)/felreset.bin: tools/felreset.S
+	@mkdir -p $(BUILD)
+	$(CROSS)as -o $(BUILD)/felreset.o $<
+	$(CROSS)objcopy -O binary $(BUILD)/felreset.o $@
+fel-reset: $(BUILD)/felreset.bin
+	$(SUNXI_FEL) write 0x2000 $(BUILD)/felreset.bin
+	$(SUNXI_FEL) exe 0x2000
+
 disasm: $(BUILD)/fw.elf
 	$(OBJDUMP) -d $< > $(BUILD)/fw.dis
 
