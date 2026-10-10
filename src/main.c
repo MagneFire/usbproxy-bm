@@ -104,14 +104,14 @@ int main(void)
 
 	if (rtc_gp_read(0) == RTC_MAGIC_HNG1) {
 		rtc_gp_write(0, 0);
-		log_printf("HNG1: hanging before the GP1 clear (SPL fallback test)\n");
+		log_printf("HNG1: hanging before the GP1 clear (boot0 death-counter test)\n");
 		uart_flush();
 		for (;;)
 			;
 	}
 
 	/* "Up" (GP1 cleared) happens in tud_mount_cb: the host configured the
-	 * gadget. Until then the SPL's guard still points at U-Boot proper. */
+	 * gadget. Until then boot0's death counter in GP1 still counts this boot. */
 	bridge_init();
 	const tusb_rhport_init_t rh_init = { .role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_HIGH };
 	tusb_init(0, &rh_init);

@@ -1,7 +1,7 @@
-/* sun6i-style watchdog at 0x01c20ca0. The SPL arms it at 8 s before the
- * Falcon jump (U-Boot patch 0003, MODE = 0x71, CFG = system reset); after a
- * U-Boot `go` it is whatever U-Boot proper left (armed and fed, 8 s). We
- * re-arm it the same way regardless and feed it from the main loop. */
+/* sun6i-style watchdog at 0x01c20ca0. boot0 arms it at 8 s before the jump
+ * (MODE = 0x71, CFG = system reset), as the U-Boot SPL did; a FEL `exe` comes
+ * with it off. We re-arm it the same way regardless and feed it from the main
+ * loop. */
 #include "h3.h"
 
 void wdt_arm(void)
