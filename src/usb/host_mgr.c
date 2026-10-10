@@ -140,10 +140,26 @@ uint32_t hcd_h3_isr_count(void);
 static uint32_t last_beat;
 static volatile bool port_connected_once;
 
+static uint32_t last_portsc_cc, port_changes;
+uint32_t host_port_changes(void) { return port_changes; }
+
 void host_mgr_poll(void)
 {
 	uint32_t now = time_ms();
 	(void)last_beat;
+	/* Port state log: every connect/enable transition with a stamp, so a
+	 * soak tells a cradle drop (CCS falls with no traffic) from a firmware
+	 * fault. CCS | PE<<1 of PORTSC. */
+	{
+		uint32_t p = hcd_h3_portsc();
+		uint32_t cc = (p & PORTSC_CCS ? 1u : 0u) | (p & PORTSC_PE ? 2u : 0u);
+		if (cc != last_portsc_cc) {
+			if (port_changes++)	/* not the first sample */
+				log_printf("port: %s%s portsc=%08lx\n", (cc & 1) ? "connected" : "DISCONNECTED",
+					   (cc & 2) ? ", enabled" : "", (unsigned long)p);
+			last_portsc_cc = cc;
+		}
+	}
 	if (ehci_h3_port_handed_over) {
 		if (!reclaim_at)
 			reclaim_at = now + 1000;
@@ -177,8 +193,8 @@ void host_cycle_start(unsigned n)
 }
 void host_cycle_status(char *buf, unsigned n)
 {
-	snprintf(buf, n, "host_cycle=left:%u ok:%u fail:%u mounts_total:%lu\n", cycles_left, cycle_mounts, cycle_fail,
-		 (unsigned long)mounts);
+	snprintf(buf, n, "host_cycle=left:%u ok:%u fail:%u mounts_total:%lu port_changes:%lu\n", cycles_left, cycle_mounts, cycle_fail,
+		 (unsigned long)mounts, (unsigned long)port_changes);
 }
 
 const char *host_link_speed(void)
