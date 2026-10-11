@@ -609,8 +609,9 @@ static void process_setup_packet(uint8_t rhport)
  * between a FIFO and SDRAM in musb "DMA mode 1" (AUTOSET / AUTOCLEAR, one
  * interrupt per transfer, endpoint interrupt only on a short packet).
  * Register map and CSR sequences from the vendor driver; the burst field
- * carries the packet size there. Used for the adb pair only, for the whole-
- * packet part of transfers >= DMA_MIN_BYTES; the short tail stays PIO. */
+ * carries the packet size there, set to 512. Used for the adb pair only, on
+ * 512-byte endpoints (high speed), for the whole-packet part of transfers
+ * >= DMA_MIN_BYTES; the short tail stays PIO. */
 #define DMA_INTE        (USBC0_BASE + 0x500)
 #define DMA_INTS        (USBC0_BASE + 0x504)
 #define DMA_CFG(n)      (USBC0_BASE + 0x540 + 0x10 * (n))
@@ -908,7 +909,8 @@ static bool edpt_n_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t *buffer, uint16
     _dcd.in_armed |= (uint16_t)TU_BIT(epnum_minus1);
     if (total_bytes == 0)
       _dcd.in_zlp_pending |= (uint16_t)TU_BIT(epnum_minus1);
-    if ((dma_mask & 2) && epnum_minus1 == 0 && total_bytes >= DMA_MIN_BYTES && !dma_ch[DMA_CHAN_TX].active) {
+    if ((dma_mask & 2) && epnum_minus1 == 0 && total_bytes >= DMA_MIN_BYTES && !dma_ch[DMA_CHAN_TX].active &&
+        USBC_Readw(USBC_REG_TXMAXP(USBC0_BASE)) == 512) {
       uint32_t n = total_bytes & ~511u;
       dcache_clean_range(buffer, n);
       tx_dma_csr_on();
@@ -943,6 +945,7 @@ static bool edpt_n_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t *buffer, uint16
       }
     }
     if ((dma_mask & 1) && epnum_minus1 == 0 && pipe->buf && (pipe->remaining & ~511u) >= DMA_MIN_BYTES &&
+        USBC_Readw(USBC_REG_RXMAXP(USBC0_BASE)) == 512 &&
         !dma_ch[DMA_CHAN_RX].active) {
       uint32_t n = pipe->remaining & ~511u;
       dcache_invalidate_range(pipe->buf, n);
