@@ -135,8 +135,10 @@ static void __attribute__((noreturn)) boot_fel(void)
 	 * over FEL without writing anything: our own header at sector 16,
 	 * the firmware's at 0x18800. */
 	uint32_t t1 = time_ms();
-	int err = mmc_init();
-	if (err) {
+	int err = size ? mmc_init() : 0;
+	if (!size) {
+		outf("boot0: card: not probed, no DRAM to read into\n");
+	} else if (err) {
 		outf("boot0: card: init failed (%d)\n", err);
 	} else {
 		struct image_header *h = (struct image_header *)H3_DRAM;
