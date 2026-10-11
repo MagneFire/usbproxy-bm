@@ -26,8 +26,6 @@ Override the toolchain prefix with `CROSS=`.
 | 0x00010 | `boot0.bin`, eGON image the BROM loads (tools/egon.py adds the checksum) |
 | 0x18800 | `fw.uimg` |
 
-Nothing else on the card is read.
-
 ## Flashing
 
 Over the OTG cable, no serial adapter; needs `sunxi-fel` from
