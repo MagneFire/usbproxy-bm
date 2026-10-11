@@ -159,7 +159,8 @@ def flash_region(sector, data, what):
 
 def wait_console(node=None, timeout=90):
     """The console node the firmware brings back after the reset: the one asked
-    for (it went away with the FEL entry too), or the first that appears."""
+    for, or the first that appears. A CDC node went away with the FEL entry; a
+    UART node never does, so it is there before the firmware is (see report)."""
     end = time.time() + timeout
     while time.time() < end:
         nodes = [node] if node else console_nodes()
@@ -174,8 +175,17 @@ def report(console):
     node = wait_console(console)
     if not node:
         die(f"no console {console or CONSOLE_GLOB} within 90 s after the reset")
-    out = console_cmd(node, "status", 1.5)
-    build = [l for l in out.splitlines() if l.startswith("build=")]
+    # a UART node is there from the start: ask until the firmware answers
+    end = time.time() + 30
+    while True:
+        try:
+            out = console_cmd(node, "status", 1.5)
+        except Exception as e:
+            out = str(e)
+        build = [l for l in out.splitlines() if l.startswith("build=")]
+        if build or time.time() > end:
+            break
+        time.sleep(1)
     say(f"console {node}: {build[0] if build else 'no build line in status'}")
 
 
