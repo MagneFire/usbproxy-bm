@@ -1,5 +1,5 @@
-/* GIC-400, secure state (the SPL jumps to us in secure SVC and never installs
- * a monitor). Everything is Group 0 and delivered as IRQ (FIQEn = 0). */
+/* GIC-400, secure state (boot0 jumps to us in secure SVC and nothing
+ * installs a monitor). Everything is Group 0 and delivered as IRQ (FIQEn = 0). */
 #include "h3.h"
 
 #define GICD_CTLR       (H3_GICD + 0x000)

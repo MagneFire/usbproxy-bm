@@ -8,9 +8,8 @@
         .global _start
 _start:
         push    {r4-r11, lr}
-        mov     r4, sp                  /* callee-saved: survives main (a .bss slot
-                                         * did not: the zero loop below wiped it and
-                                         * the return to the BROM died, 2026-10-10) */
+        mov     r4, sp                  /* callee-saved: survives main (the zero
+                                         * loop below would wipe a .bss slot) */
         ldr     sp, =__stack_top
         ldr     r0, =__bss_start
         ldr     r1, =__bss_end

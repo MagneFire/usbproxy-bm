@@ -1,4 +1,4 @@
-/* Log ring in uncached DRAM at the old ramoops address (ld/fw.ld LOGRING).
+/* Log ring in uncached DRAM (ld/fw.ld LOGRING).
  * A versioned header makes a warm reset keep the previous boot's tail and a
  * fault record; a cold start (or a different firmware) re-initialises it.
  * Every line also goes to the UART. */

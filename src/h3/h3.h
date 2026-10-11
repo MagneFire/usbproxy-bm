@@ -1,6 +1,6 @@
 /* Allwinner H3 (sun8i) register map, the parts this firmware touches.
- * Sources: BARE-METAL.md section 3 (kernel 6.6.85 ccu-sun8i-h3.c,
- * phy-sun4i-usb.c, sunxi-h3-h5.dtsi; H3 datasheet v1.2). */
+ * Sources: kernel 6.6.85 ccu-sun8i-h3.c, phy-sun4i-usb.c, sunxi-h3-h5.dtsi;
+ * H3 datasheet v1.2. */
 #ifndef H3_H
 #define H3_H
 #include <stdint.h>
@@ -41,7 +41,7 @@ static inline void clrbits(uintptr_t a, uint32_t m) { REG32(a) &= ~m; }
 #define RTC_GP(n)       (H3_RTC + 0x100 + 4 * (n))
 #define RTC_MAGIC_DEATH 0xB0070000u     /* boot0: GP1 = DEATH | n while firmware boot n is in flight (n consecutive deaths; 3 -> FEL) */
 #define RTC_MAGIC_HNG1  0x484e4731u     /* "HNG1": hang before the GP1 clear next boot (test) */
-#define RTC_MAGIC_FEL1  0xb0010fe1u     /* boot0 -> BROM FEL (p-boot / SUSE rbrom magic; the old SPL's patch 0004 too) */
+#define RTC_MAGIC_FEL1  0xb0010fe1u     /* boot0 -> BROM FEL (p-boot / SUSE rbrom magic) */
 
 #define H3_GICD         0x01c81000u
 #define H3_GICC         0x01c82000u

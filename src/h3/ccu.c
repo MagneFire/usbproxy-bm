@@ -2,8 +2,8 @@
 
 void ccu_uart0_enable(void)
 {
-	/* APB2 gate + reset for UART0; PA4/PA5 to function 2 (UART0). The SPL
-	 * already did all of this, but a FEL entry has not. */
+	/* APB2 gate + reset for UART0; PA4/PA5 to function 2 (UART0). A FEL
+	 * entry leaves these off. */
 	setbits(CCU_BUS_GATE3, BIT(16));
 	setbits(CCU_BUS_RST4, BIT(16));
 	uint32_t cfg = readl(PIO_CFG(PIO_PORT(0), 0));
@@ -38,12 +38,9 @@ unsigned ccu_cpu_mhz(void)
 	return (24 * n * k / m) >> p;
 }
 
-/* Bus clocks for the two states of the bridge: a device bound = the SPL's
- * full rates (AHB1 = PLL6/3 = 200 MHz, MBUS = PLL6/4 = 150 MHz), nothing
- * bound = half AHB1, half MBUS. Measured 2026-10-11, nothing attached: the
- * CPU at 648 instead of 1008 MHz is worth ~90 mW, AHB1 /2 ~30 mW, MBUS /8
- * nothing resolvable; the whole board went 0.66 -> 0.50 W with the host side
- * also off (console `hostoff`, -30 mW, manual: it needs a re-init to come back). */
+/* Bus clocks for the two states of the bridge: a device bound = full rates
+ * (AHB1 = PLL6/3 = 200 MHz, MBUS = PLL6/4 = 150 MHz), nothing bound = half
+ * AHB1, half MBUS. */
 void ccu_set_bus_idle(bool idle)
 {
 	writel(idle ? 0x00003190u : 0x00003180u, H3_CCU + 0x054);   /* AHB1 /2 or /1 */

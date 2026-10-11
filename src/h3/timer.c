@@ -1,5 +1,5 @@
 /* ARM architected timer: CNTPCT runs at 24 MHz from power-on; CNTFRQ is set
- * by start.S. A 1 ms tick on the non-secure physical timer (PPI 30) wakes the
+ * by start.S. A 1 ms tick on the physical timer wakes the
  * main loop out of WFI for timeouts only; stamps read the counter directly. */
 #include "h3.h"
 
@@ -37,7 +37,7 @@ void timer_init(void)
 	uint32_t tval = CNT_HZ / 1000, ctl = 1;
 	__asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(tval));
 	__asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(ctl));    /* CNTP_CTL: enable */
-	/* In secure PL1 (no monitor, where the SPL leaves us) CNTP_* drive the
+	/* In secure PL1 (no monitor, as boot0 hands over) CNTP_* drive the
 	 * secure physical timer, PPI 29; PPI 30 is the non-secure one. Enable
 	 * both so the tick works whichever state a loader hands us. */
 	gic_enable(IRQ_PPI_TIMER_S, tick_irq);

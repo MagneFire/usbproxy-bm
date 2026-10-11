@@ -30,7 +30,7 @@ static void lcr_write(uint32_t v)
 void uart_init(void)
 {
 	ccu_uart0_enable();
-	/* Let whatever the SPL/U-Boot queued finish before reprogramming. */
+	/* Let whatever a loader queued finish before reprogramming. */
 	for (int i = 0; i < 20000 && !(readl(UART_LSR) & 0x40); i++)
 		delay_us(1);
 	for (int i = 0; i < 20000 && (readl(UART_USR) & 1); i++)

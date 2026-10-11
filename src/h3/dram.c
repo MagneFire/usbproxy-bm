@@ -1,9 +1,8 @@
 /* H3 DRAM controller (DesignWare) init: U-Boot v2024.01 dram_sunxi_dw.c,
  * dram_helpers.c and dram_timings/ddr3_1333.c reduced to the H3 / DDR3 /
- * 32-bit path, with meta-usbproxy's U-Boot patch 0001 (16-word pattern size
- * detection: the single write pair intermittently reported 512 MiB on this
- * 256 MiB board). Parameters as the appliance's U-Boot build: DRAM_CLK 312
- * (usbproxy-uboot.cfg: the stability floor), ZQ 3881979, ODT on.
+ * 32-bit path, with a 16-word pattern for size detection (a single write
+ * pair can report 512 MiB on a 256 MiB board). DRAM_CLK 312, ZQ 3881979,
+ * ODT on.
  *
  * SPDX-License-Identifier: GPL-2.0+
  * (C) Copyright 2007-2015 Allwinner Technology Co.
@@ -349,7 +348,7 @@ static int channel_init(struct dram_para *para)
 	return 0;
 }
 
-/* Size detection (patch 0001): 16 address-derived words at the base must all
+/* Size detection: 16 address-derived words at the base must all
  * read back at base + offset; the overwritten words are restored. */
 static void write_pattern(uintptr_t base)
 {

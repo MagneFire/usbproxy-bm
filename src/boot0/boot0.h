@@ -42,7 +42,7 @@ struct image_header {
 };
 static inline uint32_t be32(uint32_t v) { return __builtin_bswap32(v); }
 
-#define FW_SECTOR       0x18800u        /* 49 MiB: scripts/applib.py KERNEL_SECTOR, the SPL's raw kernel region */
+#define FW_SECTOR       0x18800u        /* 49 MiB; KSECTOR in the Makefile, FW_SECTOR in tools/flash.py */
 #define FW_MAX_BYTES    (15u << 20)     /* the region's window, 0x7800 sectors */
 #define BOOT0_SECTOR    0x10u           /* 8 KiB: where the BROM reads us from */
 #endif

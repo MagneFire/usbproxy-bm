@@ -1,5 +1,5 @@
-/* boot0: eGON image in SRAM A1 at 0 (the BROM loads <= 32 KiB; 24 KiB is
- * the proven SPL size on this SoC and the limit kept here), .bss and the
+/* boot0: eGON image in SRAM A1 at 0 (the BROM loads <= 32 KiB; the limit
+ * kept here is 24 KiB), .bss and the
  * stack in SRAM A2 (0x44000, 32 KiB): untouched by the BROM in either boot
  * mode and clear of sunxi-fel's thunk/swap buffers at 0xA200-0xC000. */
 MEMORY

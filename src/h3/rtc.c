@@ -1,5 +1,5 @@
 /* RTC general-purpose registers: survive a warm reset, read 0 after a cold
- * start. Contract shared with boot0 (src/boot0/main.c) and appliance.py:
+ * start. Contract shared with boot0 (src/boot0/main.c):
  *   GP0  request/fault word: HNG1 (test: hang before the GP1 clear),
  *        0xFAtxxxxx = fault record (t = type, xxxxx = pc offset in image)
  *   GP1  0xB00700NN while a firmware boot is in flight (NN = consecutive

@@ -1,6 +1,6 @@
 /* felflash: DRAM, 64 KiB at 0x4ff00000 for code/data/bss, stack below
  * 0x4ff80000; the command block sits at 0x4ff10000 (src/felflash/main.c)
- * and the data the Mac uploads at 0x41000000 (scripts/appliance.py). */
+ * and the data the Mac uploads at 0x41000000 (tools/flash.py). */
 MEMORY
 {
     IMG (rwx) : ORIGIN = 0x4ff00000, LENGTH = 64K

@@ -1,4 +1,4 @@
-/* H3 clock tree as the U-Boot SPL leaves it (clock_sun6i.c clock_init_safe +
+/* H3 clock tree as U-Boot's SPL sets it up (clock_sun6i.c clock_init_safe +
  * clock_set_pll1(CONFIG_SYS_CLK_FREQ) + clock_init_uart), nothing more:
  *   PLL1  1008 MHz -> CPU (AXI /3, ATB /2), switched via the 24 MHz oscillator
  *   PLL6   600 MHz -> AHB1 = PLL6/3 = 200 MHz, APB1 = AHB1/2, MBUS = PLL6/4
@@ -12,7 +12,7 @@
 #define CCU_AHB1_APB1_DIV   (H3_CCU + 0x054)
 #define CCU_APB2_DIV        (H3_CCU + 0x058)
 
-#define CPU_CLK_HZ          1008000000u     /* the SPL's default; 816 is the next knob */
+#define CPU_CLK_HZ          1008000000u     /* U-Boot's default */
 
 void clock_init(void)
 {

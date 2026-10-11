@@ -40,7 +40,7 @@ boot0_reset:
         str     r1, [r0, #16]
         cpsid   if
 
-        /* FEL request (firmware console `fel`, U-Boot patch 0004 mechanism):
+        /* FEL request (firmware console `fel`):
          * RTC GP1 == 0xb0010fe1 -> clear it, clear SCTLR.A (sunxi-fel checks
          * the BROM's SCTLR), jump to the BROM's FEL routine. Before anything
          * else so a wedged clock/DRAM state cannot block recovery. */
@@ -54,7 +54,7 @@ boot0_reset:
         bl      boot0_fel_entry
 1:
         /* (ACTLR.SMP is the firmware's business: writing it here, with the
-         * BROM's I-cache and sunxi-fel's MMU live, wedged the FEL session.) */
+         * BROM's I-cache and sunxi-fel's MMU live, breaks the FEL session.) */
         /* Known CPU state: clean+invalidate the D-cache (a FEL load may have
          * written us through sunxi-fel's MMU mapping), then MMU off, D-cache
          * off, alignment check off, I-cache + branch prediction on. */

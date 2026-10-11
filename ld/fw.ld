@@ -1,10 +1,10 @@
-/* The only file that knows DRAM addresses. (An SRAM-only firmware was ruled
- * out, BARE-METAL.md section 8c: the EHCI reaches DRAM only.) */
+/* The only file that knows DRAM addresses. (An SRAM-only firmware is ruled
+ * out: the EHCI reaches DRAM only.) */
 MEMORY
 {
-    IMG     (rwx) : ORIGIN = 0x40008000, LENGTH = 256K   /* SPL/U-Boot load + entry */
+    IMG     (rwx) : ORIGIN = 0x40008000, LENGTH = 256K   /* uImage load + entry */
     DMA     (rw)  : ORIGIN = 0x40100000, LENGTH = 64K    /* uncached: EHCI pool, packet rings */
-    LOGRING (rw)  : ORIGIN = 0x4fc00000, LENGTH = 128K   /* uncached: the old ramoops window */
+    LOGRING (rw)  : ORIGIN = 0x4fc00000, LENGTH = 128K   /* uncached: the log ring */
 }
 ENTRY(_start)
 SECTIONS

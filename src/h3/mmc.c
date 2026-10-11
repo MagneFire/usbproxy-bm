@@ -84,9 +84,8 @@ static int set_clock(uint32_t hz, unsigned width)
 {
 	/* mod clock = src / 2^N / M, M <= 16; src = OSC24M up to 24 MHz, else
 	 * PLL6 (600 MHz, clock.c), as U-Boot's mmc_set_mod_clk. 24 MHz straight
-	 * from the oscillator (N=0, M=1) gave response errors on every command;
-	 * 25 MHz = PLL6 / 2 / 12 with U-Boot's delays (oclk 0, sclk 5) is the
-	 * proven SPL setting. */
+	 * from the oscillator (N=0, M=1) gives response errors; 25 MHz uses
+	 * PLL6 / 2 / 12 with U-Boot's delays (oclk 0, sclk 5). */
 	uint32_t src = hz <= 24000000u ? 24000000u : 600000000u, pll = hz <= 24000000u ? 0 : (1u << 24);
 	uint32_t div = (src + hz - 1) / hz, n = 0, dly = hz <= 400000 ? 0 : (5u << 20);
 	while (div > 16) { n++; div = (div + 1) / 2; }

@@ -1,6 +1,6 @@
-/* felflash: one card region per call. The Mac (scripts/appliance.py bm
- * flash) puts the data in DRAM, fills the command block, runs us, reads the
- * status back; boot0's FEL run has already set the clocks and DRAM up.
+/* felflash: one card region per call. The Mac (tools/flash.py flash) puts
+ * the data in DRAM, fills the command block, runs us, reads the status
+ * back; boot0's FEL run has already set the clocks and DRAM up.
  *
  *   command block at FELFLASH_CMD:
  *     u32 magic   "FLSH"

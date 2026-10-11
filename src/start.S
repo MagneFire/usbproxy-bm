@@ -24,14 +24,14 @@ _start:
 reset:
         cpsid   if
         /* Clean+invalidate the D-cache whatever its state: off on both ways
-         * in, but it may hold stale clean lines. One DCCISW pass leaves it clean and empty, and nothing can
-         * dirty it again before it is disabled below. (A second,
-         * invalidate-only pass with the caches off hung the A7 at this point;
-         * not needed, not done.) */
+         * in, but it may hold stale clean lines. One DCCISW pass leaves it
+         * clean and empty, and nothing can dirty it again before it is
+         * disabled below. (An invalidate-only pass with the caches off hangs
+         * the A7 here.) */
         bl      dcache_clean_invalidate_all
         /* Belt and braces: also clean+invalidate our own image by address
-         * (DCCIMVAC), line by line: the set/way pass alone did not always
-         * land a freshly written image in DRAM on this A7. */
+         * (DCCIMVAC), line by line: the set/way pass alone does not always
+         * land a freshly written image in DRAM. */
         ldr     r0, =_start
         ldr     r1, =__ram_end
         bic     r0, r0, #63
@@ -46,9 +46,8 @@ reset:
         mcr     p15, 0, r0, c1, c0, 0
         isb
         /* Cortex-A7: ACTLR.SMP must be 1 before the caches/MMU go on (TRM;
-         * Linux's proc-v7 does the same); the BROM leaves it 0 and neither
-         * boot0 nor the H3 U-Boot SPL (no SPL_ARMV7_SET_CORTEX_SMPEN) sets
-         * it. Written here with everything off, then the invalidates. */
+         * Linux's proc-v7 does the same); the BROM leaves it 0 and boot0 does
+         * not set it. Written here with everything off, then the invalidates. */
         mrc     p15, 0, r0, c1, c0, 1
         orr     r0, r0, #(1 << 6)
         mcr     p15, 0, r0, c1, c0, 1
@@ -82,11 +81,9 @@ reset:
         blo     2b
 
         /* .dma (uncached pools: EHCI queue heads/qTDs, TinyUSB buffers) is
-         * NOLOAD too and C code assumes it starts zeroed. On a cold
-         * power-on it held DRAM noise: a garbage queue head carried an
-         * attached-qTD pointer of 0x60190000 and the first EHCI poll took
-         * a data abort on invalidating it (seen 2026-10-10 18:01; warm
-         * boots were fine because DRAM kept the previous image). */
+         * NOLOAD too and C code assumes it starts zeroed. After a cold
+         * power-on it holds DRAM noise, and a garbage queue head makes the
+         * first EHCI poll abort. */
         ldr     r0, =__dma_start
         ldr     r1, =__dma_end
 4:      cmp     r0, r1

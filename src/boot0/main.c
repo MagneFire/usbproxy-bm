@@ -1,4 +1,4 @@
-/* boot0 main: what the U-Boot SPL did for the appliance, and nothing else.
+/* boot0 main: clocks, DRAM and the firmware, nothing else.
  *
  * Card boot (the BROM read us from sector 16):
  *   1. RTC GP1 death counter: 0xB00700NN means "firmware boot NN in flight";
@@ -32,11 +32,11 @@ static void outf(const char *fmt, ...)
 	if (n > 0) uart_puts(b);
 }
 
-/* Into FEL the proven way (U-Boot patch 0004, the firmware's `fel`): the
- * request word in GP1 and a watchdog reset, so the jump to the BROM happens
- * from boot0's first instructions with the BROM's own state intact. A jump
- * from here, after clocks and SD traffic, made the BROM retry the card boot
- * instead (seen 2026-10-10). GP3 keeps the reason for `bm check`. */
+/* Into FEL as the firmware's `fel` does: the request word in GP1 and a
+ * watchdog reset, so the jump to the BROM happens from boot0's first
+ * instructions with the BROM's own state intact. A jump from here, after
+ * clocks and SD traffic, makes the BROM retry the card boot instead. GP3
+ * keeps the reason. */
 static void __attribute__((noreturn)) enter_fel(unsigned why)
 {
 	rtc_gp_write(3, 0xB0070000u | why);
@@ -116,7 +116,7 @@ static void __attribute__((noreturn)) boot_card(void)
 	clrbits(CCU_BUS_GATE0, BIT(8));
 	rtc_gp_write(3, t2 & 0xffffffu);
 	wdt_feed();
-	__asm__ volatile("mcr p15, 0, %0, c14, c0, 0" :: "r"(CNT_HZ));    /* CNTFRQ, as the SPL did */
+	__asm__ volatile("mcr p15, 0, %0, c14, c0, 0" :: "r"(CNT_HZ));    /* CNTFRQ for the firmware */
 	boot0_jump(ep);
 }
 

@@ -1,5 +1,5 @@
 /* Minimal vsnprintf: %c %s %d %i %u %x %X %p %%, flags '-' '0', width,
- * .precision (for %s), 'l' accepted and ignored (32-bit). */
+ * .precision (for %s), 'l' and 'z' accepted and ignored (32-bit). */
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
