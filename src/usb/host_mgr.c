@@ -3,10 +3,10 @@
 #include "tusb.h"
 #include "host/usbh_pvt.h"
 #include "host/hcd.h"
+#include "ehci_h3.h"
 #include "host_mgr.h"
 #include "bridge/bridge.h"
 
-extern volatile int ehci_h3_port_handed_over;
 uint32_t hcd_h3_portsc(void);
 void hcd_h3_portsc_write(uint32_t v);
 

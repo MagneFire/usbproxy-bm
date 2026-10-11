@@ -2,6 +2,8 @@
 #include "fw.h"
 #include "tusb.h"
 #include "device/usbd_pvt.h"
+#include "dcd_h3.h"
+#include "ehci_h3.h"
 #include "bridge.h"
 #include "bridge/adb_proto.h"
 
@@ -442,7 +444,6 @@ static void h2w_drain_partial(struct slot *s)
 	if (s == &slots[0] && (fr.payload_remaining == 0 || fr.dropping || fr.unsynced)) return;
 	if (oldest_full(d) >= 0) return;		/* order: complete buffers first */
 	bool dma;
-	extern uint32_t dcd_h3_out_landed(uint8_t, bool *);
 	d->progress = dcd_h3_out_landed(s->g_out, &dma);
 	uint32_t landed = d->progress & ~(PKT - 1);
 	if (dma) { if (landed < PKT) return; landed -= PKT; }	/* residual may run ahead of the data */
@@ -628,7 +629,6 @@ static void w2h_drain(struct slot *s)
 	}
 }
 
-uint32_t ehci_h3_xfer_progress(uint8_t dev_addr, uint8_t ep_addr);
 
 static void w2h_drain_partial(struct slot *s)
 {

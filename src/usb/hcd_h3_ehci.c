@@ -2,11 +2,12 @@
  * PHY1 bring-up, controller reset, interrupt threshold 1 microframe (the
  * default 8 = 1 ms would put a millisecond on every completion),
  * CONFIGFLAG so the port routes to EHCI, GIC wiring. The EHCI core itself
- * is ehci_h3.c (TinyUSB's ehci.c forked). */
+ * is portable/ehci/h3/ehci_h3.c in the tinyusb fork. */
 #include "fw.h"
 #include "tusb.h"
 #include "host/hcd.h"
 #include "ehci_api.h"
+#include "ehci_h3.h"
 #include "usbphy.h"
 
 #define EHCI_CAP        (H3_EHCI1 + 0x00)
@@ -51,7 +52,6 @@ static void ehci_irq(void)
 }
 uint32_t hcd_h3_isr_count(void) { return isr_count; }
 
-void ehci_h3_poll_async(uint8_t rhport);
 void hcd_h3_poll(void)
 {
 	gic_mask(IRQ_EHCI1);
