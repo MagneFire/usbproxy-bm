@@ -18,6 +18,7 @@ struct con {
 	int len;
 	bool follow;		/* `log -f`: stream new log bytes until any key */
 	uint32_t follow_total;
+	bool cr;		/* the last key was CR: an LF after it ends the same line */
 };
 
 static bool cdc_write_all(const char *s, size_t n, uint32_t deadline)
@@ -295,6 +296,9 @@ static void run(char *s)
 static void feed(struct con *con, int c)
 {
 	cur = con;
+	bool lf_after_cr = c == '\n' && con->cr;
+	con->cr = c == '\r';
+	if (lf_after_cr) return;
 	if (con->follow) {		/* any key ends `log -f`; the key is eaten */
 		con->follow = false;
 		con->len = 0;
