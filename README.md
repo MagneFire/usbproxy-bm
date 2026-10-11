@@ -6,8 +6,7 @@ the board's OTG port, where the board presents one fixed USB gadget. No
 operating system, no bootloader: `boot0` (our own first stage) loads the
 firmware from the SD card and jumps to it. The firmware is a superloop on
 TinyUSB (musb gadget on the OTG port, EHCI host on the USB-A port) with a
-CDC-ACM console on the gadget. Design and measurements: `BARE-METAL.md` in
-the meta-usbproxy repository.
+CDC-ACM console on the gadget.
 
 ## Build
 
@@ -16,6 +15,8 @@ Needs `arm-none-eabi-gcc` (Homebrew: `/opt/homebrew/bin/arm-none-eabi-*`),
 
     make            # build/fw.bin, build/boot0.bin, build/felflash.bin
     make uimage     # build/fw.uimg: fw.bin with the legacy uImage header boot0 expects
+    make size       # sizes of the three images
+    make disasm     # build/fw.dis
 
 Override the toolchain prefix with `CROSS=`.
 
@@ -32,7 +33,8 @@ Nothing else on the card is read.
 
 Over the OTG cable, no serial adapter; needs `sunxi-fel` from
 [sunxi-tools](https://github.com/linux-sunxi/sunxi-tools) (`SUNXI_FEL=` if not
-in `~/.local/bin`) and `uv` for `tools/flash.py`:
+in `~/.local/bin`) and `uv` for `tools/flash.py`. The console is the first
+`/dev/cu.usbmodem*`; set `BM_CONSOLE=` or pass `--console` to pick another.
 
     make flash              # firmware only
     make flash BOOT0=1      # firmware, then boot0
@@ -46,6 +48,8 @@ row) is handled the same way. `tools/flash.py fel` / `reset` enter and leave FEL
 
 A fresh card from a reader:
 
-    make uimage
+    make uimage boot0
     dd if=build/boot0.bin of=/dev/rdiskN bs=512 seek=16
     dd if=build/fw.uimg  of=/dev/rdiskN bs=512 seek=100352
+
+`make flash-sd DISK=/dev/rdiskN` writes and verifies `fw.uimg` only.

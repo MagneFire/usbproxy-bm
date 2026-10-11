@@ -24,7 +24,8 @@ CONSOLE_GLOB = os.environ.get("BM_CONSOLE") or "/dev/cu.usbmodem*"
 
 FW_LOAD = 0x40008000            # ld/fw.ld IMG, the uImage's load/entry
 FW_SECTOR = 0x18800             # src/boot0/boot0.h FW_SECTOR
-BOOT0_SECTOR = 0x10
+BOOT0_SECTOR = 0x10             # the BROM reads boot0 from sector 16
+UIMAGE_MAGIC = b"\x27\x05\x19\x56"  # src/boot0/boot0.h IH_MAGIC
 FELFLASH_ADDR = 0x4ff00000      # ld/felflash.ld
 FELFLASH_CMD = 0x4ff10000       # src/felflash/main.c command block
 FELFLASH_DATA = 0x41000000      # data, readback right after it
@@ -146,6 +147,7 @@ def dram_up(boot0):
 
 def fel_reset():
     fel_write(FELRESET_ADDR, FELRESET_BLOB, "felreset")
+    # the board resets under sunxi-fel, so the exe may report a failure
     fel("exe", f"0x{FELRESET_ADDR:x}", timeout=10)
     say("left FEL (watchdog reset)")
 
@@ -171,7 +173,7 @@ def flash_region(sector, data, what):
 def wait_console(node=None, timeout=90):
     """The console node the firmware brings back after the reset: the one asked
     for, or the first that appears. A CDC node went away with the FEL entry; a
-    UART node never does, so it is there before the firmware is (see report)."""
+    UART node never does, so it is there before the firmware is."""
     end = time.time() + timeout
     while time.time() < end:
         nodes = [node] if node else console_nodes()
@@ -232,13 +234,13 @@ def main():
     fel_request(a.console)
     dram_up(boot0)
     if a.op == "run":
-        if data[:4] == b"\x27\x05\x19\x56":
+        if data[:4] == UIMAGE_MAGIC:
             die("run takes the raw fw.bin, not the uImage")
         fel_write(FW_LOAD, data, img.name)
         fel_exe(FW_LOAD)
-        say(f"running from RAM (the card's image is back after the next reset)")
+        say("running from RAM (the card's image is back after the next reset)")
     else:
-        if data[:4] != b"\x27\x05\x19\x56":
+        if data[:4] != UIMAGE_MAGIC:
             die(f"{img}: not a uImage (make uimage)")
         felflash = pathlib.Path(a.felflash) if a.felflash else build / "felflash.bin"
         if not felflash.exists():
