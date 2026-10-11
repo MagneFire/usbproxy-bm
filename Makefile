@@ -14,7 +14,7 @@ SPL       ?= $(BUILD)/boot0.bin      # what `make fel` runs first to bring DRAM 
 BUILD   := build
 TUSB    := third_party/tinyusb/src
 GITREV  := $(shell git rev-parse --short=10 HEAD 2>/dev/null || echo nogit)
-DIRTY   := $(shell git diff --quiet 2>/dev/null || echo +)
+DIRTY   := $(shell git diff --quiet HEAD 2>/dev/null || echo +)
 LOAD    := 0x40008000
 KSECTOR := 100352          # 0x18800, applib.KERNEL_SECTOR
 
