@@ -3,11 +3,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 /* The datapath: one slot = one bulk pair on the gadget (adb or fastboot
- * interface) bridged to the same pair on the watch. Two 4 KiB buffers per
- * direction: one being filled by one side while the other drains into the
- * other side. Transfers are whole adb messages at most 4 KiB (the legacy
- * transport's maxdata), ended by a short packet or by filling the buffer.
- * Packets that arrive while no watch is bound wait in the buffers. */
+ * interface) bridged to the same pair on the watch. BRIDGE_NBUF 4 KiB
+ * buffers per direction, filled by one side and drained into the other in
+ * order. A read is one adb message or a BRIDGE_BUF piece of one, ended by a
+ * short packet or by filling the buffer. With no watch bound, the adb slot
+ * reads and drops (keeping the host's CNXN) and fastboot packets wait in the
+ * buffers. */
 #define BRIDGE_BUF 4096
 #define BRIDGE_NBUF 4
 

@@ -13,7 +13,7 @@ enum { TAG_NONE = 0, TAG_PAY_LAST, TAG_OKAY };	/* cycle stamps, see cyc_* */
 struct dir {
 	/* Cached RAM, not the uncached .dma section: the musb side moves these
 	 * bytes by PIO one word at a time and an uncached word load is a DRAM
-	 * round trip (~21 us per 512 B packet measured). The EHCI side gets
+	 * round trip. The EHCI side gets
 	 * clean/invalidate by address (hcd_dcache_* in hcd_h3_ehci.c); each
 	 * buffer is whole cache lines so the metadata below is never hit. */
 	__attribute__((aligned(64))) uint8_t buf[BRIDGE_NBUF][BRIDGE_BUF];
@@ -55,7 +55,7 @@ struct slot {
 };
 
 static struct slot slots[2];
-static uint32_t chunk = BRIDGE_BUF;	/* with cut-through a whole message per read; 2048 was best before it */
+static uint32_t chunk = BRIDGE_BUF;	/* largest read (console `chunk`) */
 
 void bridge_set_chunk(uint32_t bytes)
 {
@@ -72,15 +72,11 @@ uint32_t bridge_cut_floor(void) { return cut_floor; }
 static uint32_t cut_mask = 2;
 void bridge_set_cut(uint32_t m) { cut_mask = m & 3; }
 /* watch->Mac cut-through: stay cut_lag packets behind the EHCI overlay's
- * byte count (console `cutlag`). M3 blamed 64-128 stale bytes at packet
- * starts on the count running ahead of the data in DRAM; the M4b soak
- * traced that corruption to the musb TX double buffer instead
- * (dcd_h3_musb.c fifo_map) and the canary below never tripped in 10k+
- * packets at lag 0. Lag 1 is kept as margin (~10 us per message).
- * `cutcanary 1` seeds every 64-byte line of a cut-through read with a
- * marker in its last word and forwards a line only once the marker is
- * gone; cut_stale[k] (k = line within the packet) counts lines the count
- * called landed that still held it: the HC's real lag, measured. */
+ * byte count (console `cutlag`), a margin in case the count runs ahead of
+ * the data in DRAM. `cutcanary 1` seeds every 64-byte line of a cut-through
+ * read with a marker in its last word and forwards a line only once the
+ * marker is gone; cut_stale[k] (k = line within the packet) counts lines
+ * the count called landed that still held it. */
 static uint32_t cut_lag = 1;
 static bool cut_canary = false;
 void bridge_set_cut_lag(uint32_t p) { cut_lag = p > 7 ? 7 : p; }
@@ -91,7 +87,7 @@ uint32_t bridge_cut_canary(void) { return cut_canary; }
 static uint32_t cut_stale[8], cut_stale_total, cut_stale_max_pkt;
 uint32_t bridge_cut(void) { return cut_mask; }
 
-/* WRTE->OKAY cycle stamps on the adb slot (BARE-METAL.md M3 gate). One
+/* WRTE->OKAY cycle stamps on the adb slot. One
  * tracker per direction of the WRTE: "push" = WRTE from the Mac, "pull" =
  * WRTE from the watch. adb keeps more than one WRTE in flight, so each
  * tracker holds a ring of outstanding messages and OKAYs retire them in
@@ -377,6 +373,23 @@ static int dir_fill_complete(struct dir *d, uint32_t len)
 	return i;
 }
 
+/* The filling buffer is complete but carries nothing to forward. */
+static void dir_fill_drop(struct dir *d)
+{
+	int i = d->filling;
+	d->filling = -1;
+	d->fill_us += time_us() - d->t_fill_sub; d->fill_n++;
+	d->state[i] = B_EMPTY;
+}
+
+static void dir_drain_drop(struct dir *d)
+{
+	if (d->draining < 0) return;
+	d->state[d->draining] = B_EMPTY;
+	d->draining = -1;
+	d->partial = false;
+}
+
 /* ---- host -> watch ---------------------------------------------------- */
 static void h2w_fill(struct slot *s)
 {
@@ -443,9 +456,9 @@ static void h2w_drain_partial(struct slot *s)
 	bool dma;
 	uint32_t landed = dcd_h3_out_landed(s->g_out, &dma) & ~(PKT - 1);
 	if (dma) { if (landed < PKT) return; landed -= PKT; }	/* residual may run ahead of the data */
-	/* Per-packet OUT transfers made the watch slower (its OKAY ~200 us
-	 * later); hand on whole 2 KiB halves instead. The remainder goes with
-	 * the fill's completion. */
+	/* Hand on cut_floor pieces, not single packets: per-packet OUT
+	 * transfers slow the watch's OKAY. The remainder goes with the fill's
+	 * completion. */
 	if (landed < d->fwd + cut_floor) return;
 	landed = d->fwd + ((landed - d->fwd) / cut_floor) * cut_floor;
 	int i = d->filling;
@@ -469,18 +482,14 @@ void bridge_gadget_out_done(int sl, uint32_t len)
 		 * needs it, and forwarding it costs an EHCI round per WRTE. */
 		d->zlps++;
 		if (s == &slots[0]) {
-			d->filling = -1;
-			d->fill_us += time_us() - d->t_fill_sub; d->fill_n++;
-			d->state[i] = B_EMPTY;
+			dir_fill_drop(d);
 			h2w_fill(s);
 			return;
 		}
 	}
 	if (s == &slots[0] && !framer_feed(d->buf[i], len, !s->bound)) {
 		/* idle sink, a dropped tail, or bytes where a header was due */
-		d->filling = -1;
-		d->fill_us += time_us() - d->t_fill_sub; d->fill_n++;
-		d->state[i] = B_EMPTY;
+		dir_fill_drop(d);
 		h2w_fill(s);
 		return;
 	}
@@ -530,13 +539,6 @@ void bridge_watch_out_done(int sl, uint32_t len, int result)
 /* ---- watch -> host ---------------------------------------------------- */
 static void w_in_cb(tuh_xfer_t *x);
 
-/* The watch's adbd sends no zero-length packets, so a payload that is a
- * multiple of 512 bytes and shorter than the buffer would merge with the
- * next header in a plain 4 KiB read, and the Mac's 24-byte header read then
- * overruns ("connection terminated: read failed"). Read adb-aware instead:
- * a 24-byte header, then exactly its data_length (the appliance's sized
- * bulk-IN reads). The fastboot slot keeps whole-buffer reads (its
- * device->host messages are short text). */
 /* A failed watch IN read is retried from bridge_poll after a pause, not at
  * once: a stalled endpoint fails every read. */
 #define W2H_RETRY_MS 10
@@ -546,6 +548,11 @@ static void w2h_retry_later(struct dir *d)
 	d->retry_at = time_ms() + W2H_RETRY_MS;
 }
 
+/* The watch's adbd sends no zero-length packets, so a payload that is a
+ * multiple of 512 bytes and shorter than the buffer would merge with the
+ * next header in a plain 4 KiB read, and the Mac's 24-byte header read then
+ * overruns. Read adb-aware instead: a 24-byte header, then exactly its
+ * data_length. */
 static void w2h_fill(struct slot *s)
 {
 	struct dir *d = &s->w2h;
@@ -557,12 +564,9 @@ static void w2h_fill(struct slot *s)
 		want = d->pending_payload ? TU_MIN(d->pending_payload, BRIDGE_BUF) : ADB_HDR_LEN;
 	else
 		/* fastboot: the host reads 64 bytes per response, so this slot
-		 * must never hand the Mac a piece bigger than one response. With
-		 * 4096-byte reads the cut-through once forwarded a 512-byte piece
-		 * of a narwhal `getvar all` and every fastboot read failed with
-		 * e00002e8 until the watch was reseated. One packet per read keeps
-		 * the slot off the cut-through path (expect <= PKT); a short reply
-		 * still completes the read at once. */
+		 * must never hand the Mac a piece bigger than one response. One
+		 * packet per read keeps the slot off the cut-through path
+		 * (expect <= PKT); a short reply still completes the read at once. */
 		want = s->w_in_mps;
 	if (want > chunk) want = chunk;
 	d->expect = want;
@@ -629,10 +633,8 @@ static void w2h_drain_partial(struct slot *s)
 	if (d->resync) return;				/* dropped anyway, see w2h_drain_abort */
 	if (oldest_full(d) >= 0) return;
 	uint32_t landed = ehci_h3_xfer_progress(s->daddr, s->w_in) & ~(PKT - 1);
-	/* The HC's byte count in the overlay runs ahead of the data: the newest
-	 * packet's first burst(s) were still in flight when we read them (64-128
-	 * stale bytes at packet starts, md5 mismatch). Stay one packet behind;
-	 * the completion path delivers the rest. */
+	/* Stay cut_lag packets behind the overlay's count; the completion path
+	 * delivers the rest. */
 	if (landed < cut_lag * PKT) return;
 	landed -= cut_lag * PKT;
 	if (landed <= d->fwd) return;
@@ -704,7 +706,7 @@ void bridge_watch_in_done(int sl, uint32_t len, int result)
 		} else if (len == ADB_HDR_LEN) {
 			uint32_t cmd, a0, a1, dl;
 			if ((hdr = adb_parse_hdr(d->buf[i], &cmd, &a0, &a1, &dl)))
-				d->pending_payload = dl;	/* read in BRIDGE_BUF pieces; legacy adbd never exceeds 4096 */
+				d->pending_payload = dl;	/* read in BRIDGE_BUF pieces */
 			else
 				d->pending_payload = 0;		/* not adb framing: keep reading headers */
 		} else {
@@ -739,10 +741,10 @@ void bridge_gadget_in_done(int sl)
 	w2h_fill(s);
 }
 
-/* Main loop: forward what has landed so far (both directions, adb slot). */
 bool bridge_adb_pulsing(void) { return fr.pulsing; }
 
 static void adb_slot_poll(struct slot *s);
+/* Main loop: forward what has landed so far (both directions, adb slot). */
 void bridge_poll(void)
 {
 	for (int k = 0; k < 2; k++) {
@@ -945,7 +947,7 @@ void bridge_unbind(int sl)
 	struct slot *s = &slots[sl & 1];
 	s->bound = false;
 	/* The host stack cancels the device's transfers at close; drop ours. */
-	if (s->h2w.draining >= 0) { s->h2w.state[s->h2w.draining] = B_EMPTY; s->h2w.draining = -1; s->h2w.partial = false; }
+	dir_drain_drop(&s->h2w);
 	if (s->w2h.filling >= 0) { s->w2h.state[s->w2h.filling] = B_EMPTY; s->w2h.filling = -1; }
 	/* adb: FULL buffers waiting to go to the watch belonged to it */
 	if (s == &slots[0])
@@ -965,7 +967,7 @@ void bridge_unbind(int sl)
 	if (pulse) {
 		adb_halt_in(s, true);
 		fr.pulsing = true; fr.pulse_until = time_ms() + ADB_KICK_PULSE_MS; fr.pulses++;
-		if (s->w2h.draining >= 0) { s->w2h.state[s->w2h.draining] = B_EMPTY; s->w2h.draining = -1; s->w2h.partial = false; }
+		dir_drain_drop(&s->w2h);
 	}
 	log_printf("bridge: slot %d unbound%s\n", sl, pulse ? " (halt pulse to kick adb, then idle NAK)" : " (idle NAK)");
 	h2w_fill(s);	/* the idle sink keeps reading */
@@ -1001,12 +1003,15 @@ void bridge_status(char *buf, unsigned n)
 		(unsigned long)fr.payload_remaining, fr.dropping, fr.unsynced, (unsigned long)fr.cnxn_len, fr.cnxn_pending,
 		fr.cnxn_seen_since_bind, (unsigned long)fr.captures, (unsigned long)fr.replays, (unsigned long)fr.dropped_msgs,
 		(unsigned long)fr.resyncs, (unsigned long)fr.pulses, slots[0].gadget_up && usbd_edpt_stalled(0, slots[0].g_in));
+	if (k >= (int)n) return;
 	k += snprintf(buf + k, n - (unsigned)k,
 		"cut_w2h=lag:%lu canary:%d stale:%lu max_ahead_pkts:%lu lines:%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu\n",
 		(unsigned long)cut_lag, cut_canary, (unsigned long)cut_stale_total, (unsigned long)cut_stale_max_pkt,
 		(unsigned long)cut_stale[0], (unsigned long)cut_stale[1], (unsigned long)cut_stale[2], (unsigned long)cut_stale[3],
 		(unsigned long)cut_stale[4], (unsigned long)cut_stale[5], (unsigned long)cut_stale[6], (unsigned long)cut_stale[7]);
+	if (k >= (int)n) return;
 	k += cyc_status("push", &cyc_push, buf + k, n - (unsigned)k);
+	if (k >= (int)n) return;
 	k += cyc_status("pull", &cyc_pull, buf + k, n - (unsigned)k);
 	for (int i = 0; i < 2 && k < (int)n; i++) {
 		struct slot *s = &slots[i];
