@@ -1,7 +1,7 @@
 # usbproxy-bm: bare-metal usb-proxy firmware for the Orange Pi Zero (H2+/H3).
 # Loaded by boot0 (src/boot0: the uImage at SD sector 0x18800) or over FEL
 # (tools/flash.py). See README.md.
-CROSS     ?= /opt/homebrew/bin/arm-none-eabi-
+CROSS     ?= arm-none-eabi-
 CC        := $(CROSS)gcc
 OBJCOPY   := $(CROSS)objcopy
 OBJDUMP   := $(CROSS)objdump

@@ -10,8 +10,7 @@ CDC-ACM console on the gadget.
 
 ## Build
 
-Needs `arm-none-eabi-gcc` (Homebrew: `/opt/homebrew/bin/arm-none-eabi-*`),
-`mkimage` (u-boot-tools) and Python 3.
+Needs `arm-none-eabi-gcc`, `mkimage` (u-boot-tools) and Python 3.
 
     make            # build/fw.bin, build/boot0.bin, build/felflash.bin
     make uimage     # build/fw.uimg: fw.bin with the legacy uImage header boot0 expects
