@@ -30,23 +30,10 @@ static inline void put_le32(uint8_t *p, uint32_t v)
 	p[3] = (v >> 24) & 0xff;
 }
 
-// The command word as adb encodes it: the four ASCII bytes little-endian.
-static inline uint32_t adb_cmd(const char s[4])
-{
-	return (uint32_t)(uint8_t)s[0] |
-		((uint32_t)(uint8_t)s[1] << 8) |
-		((uint32_t)(uint8_t)s[2] << 16) |
-		((uint32_t)(uint8_t)s[3] << 24);
-}
-
-static inline void adb_cmd_to_string(uint32_t cmd, char out[5])
-{
-	out[0] = cmd & 0xff;
-	out[1] = (cmd >> 8) & 0xff;
-	out[2] = (cmd >> 16) & 0xff;
-	out[3] = (cmd >> 24) & 0xff;
-	out[4] = '\0';
-}
+// Command words: the four ASCII bytes, little-endian.
+#define A_CNXN 0x4e584e43u
+#define A_OKAY 0x59414b4fu
+#define A_WRTE 0x45545257u
 
 // Parse a 24-byte header. False if the magic does not match the command or
 // the payload length is implausible (the stream is not adb, or not framed

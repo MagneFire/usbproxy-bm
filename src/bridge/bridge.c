@@ -9,9 +9,6 @@
 
 enum { B_EMPTY = 0, B_FILLING, B_FULL, B_DRAINING };
 enum { TAG_NONE = 0, TAG_PAY_LAST, TAG_OKAY };	/* cycle stamps, see cyc_* */
-#define A_WRTE 0x45545257u
-#define A_OKAY 0x59414b4fu
-#define A_CNXN 0x4e584e43u
 
 struct dir {
 	/* Cached RAM, not the uncached .dma section: the musb side moves these

@@ -6,6 +6,7 @@
 #include "ehci_h3.h"
 #include "host_mgr.h"
 #include "bridge/bridge.h"
+#include "bridge/adb_proto.h"
 
 uint32_t hcd_h3_portsc(void);
 void hcd_h3_portsc_write(uint32_t v);
@@ -16,6 +17,7 @@ void hcd_h3_portsc_write(uint32_t v);
 #define PORTSC_LS_MASK  (3u << 10)
 #define PORTSC_OWNER    BIT(13)
 
+struct hslot { uint8_t daddr, ep_in, ep_out; uint16_t in_mps; bool bound, bridged; uint32_t in_pkts, out_pkts; };
 static struct hslot slots[2];
 static uint8_t cur_daddr;
 static uint32_t reclaim_at, reenum_at;
@@ -56,7 +58,7 @@ static uint16_t drv_open(uint8_t rhport, uint8_t daddr, tusb_desc_interface_t co
 	if (!in || !out)
 		return 0;
 	s->daddr = daddr; s->ep_in = in; s->ep_out = out; s->bound = true;
-	s->in_pkts = s->out_pkts = s->in_bytes = s->out_bytes = 0;
+	s->in_pkts = s->out_pkts = 0;
 	log_printf("host: interface %u (proto %02x) -> slot %d, in %02x (mps %u) out %02x\n",
 		   itf->bInterfaceNumber, itf->bInterfaceProtocol, idx, in, s->in_mps, out);
 	return need;
@@ -123,7 +125,7 @@ void tuh_mount_cb(uint8_t daddr)
 	if (sp == TUSB_SPEED_HIGH) {
 		hs_retries = 0;		/* the tries are per attach */
 	} else if (hs_retries < 8) {
-		/* The cold-boot chirp miss (DEVELOPMENT.md section 8): try again. */
+		/* The chirp can be missed on a cold boot: reset again. */
 		hs_retries++;
 		reenum_pending = true;
 		reenum_at = time_ms() + 200;
@@ -139,16 +141,11 @@ void tuh_umount_cb(uint8_t daddr)
 }
 
 /* ---- port policy ------------------------------------------------------ */
-static uint32_t last_beat;
-static volatile bool port_connected_once;
-
 static uint32_t last_portsc_cc, port_changes;
-uint32_t host_port_changes(void) { return port_changes; }
 
 void host_mgr_poll(void)
 {
 	uint32_t now = time_ms();
-	(void)last_beat;
 	/* Port state log: every connect/enable transition with a stamp, so a
 	 * soak tells a cradle drop (CCS falls with no traffic) from a firmware
 	 * fault. CCS | PE<<1 of PORTSC. */
@@ -199,7 +196,8 @@ void host_cycle_status(char *buf, unsigned n)
 		 (unsigned long)mounts, (unsigned long)port_changes);
 }
 
-const char *host_link_speed(void)
+/* "480", "12", "1.5", "none" */
+static const char *host_link_speed(void)
 {
 	uint32_t p = hcd_h3_portsc();
 	if (!(p & PORTSC_CCS)) return "none";
@@ -209,8 +207,6 @@ const char *host_link_speed(void)
 }
 
 uint8_t host_daddr(void) { return cur_daddr; }
-uint32_t host_portsc(void) { return hcd_h3_portsc(); }
-const struct hslot *host_slot(int slot) { return &slots[slot & 1]; }
 
 /* ---- console test transfer ------------------------------------------- */
 CFG_TUH_MEM_SECTION CFG_TUH_MEM_ALIGN static uint8_t test_buf[4096];
@@ -234,12 +230,11 @@ static void test_done(tuh_xfer_t *xfer)
 	}
 	for (int i = 0; i < 2; i++) {
 		if (!slots[i].bound || slots[i].daddr != xfer->daddr) continue;
-		if (xfer->ep_addr & 0x80) { slots[i].in_pkts++; slots[i].in_bytes += xfer->actual_len; }
-		else { slots[i].out_pkts++; slots[i].out_bytes += xfer->actual_len; }
+		if (xfer->ep_addr & 0x80) slots[i].in_pkts++;
+		else slots[i].out_pkts++;
 	}
 }
 
-static uint32_t adb_sum(const uint8_t *p, uint32_t n) { uint32_t s = 0; while (n--) s += *p++; return s; }
 static uint32_t cnxn_payload_len;
 
 static void cnxn_hdr_done(tuh_xfer_t *xfer)
@@ -248,13 +243,13 @@ static void cnxn_hdr_done(tuh_xfer_t *xfer)
 		   (unsigned long)xfer->actual_len, (unsigned long)(time_us() - test_t0));
 	if (xfer->result != XFER_RESULT_SUCCESS) return;
 	tuh_xfer_t x = { .daddr = xfer->daddr, .ep_addr = xfer->ep_addr, .buflen = cnxn_payload_len,
-			 .buffer = test_buf + 24, .complete_cb = test_done, .user_data = 0 };
+			 .buffer = test_buf + ADB_HDR_LEN, .complete_cb = test_done, .user_data = 0 };
 	test_t0 = time_us();
 	tuh_edpt_xfer(&x);
 }
 
-/* Send an adb CNXN (version 0x01000000, maxdata 4096, banner "host::") to
- * the watch's adb slot and queue a 4 KiB read for its reply. */
+/* Send an adb CNXN to the watch's adb slot: legacy (version 0x01000000,
+ * maxdata 4096, banner "host::") or modern (0x01000001, 1 MiB, features). */
 int host_test_cnxn(int modern)
 {
 	struct hslot *s = &slots[0];
@@ -266,21 +261,17 @@ int host_test_cnxn(int modern)
 	const char *banner = modern ? features : legacy;
 	uint32_t n = modern ? (uint32_t)strlen(features) : (uint32_t)sizeof legacy;	/* legacy: with the NUL */
 	uint8_t *h = test_buf;
-	uint32_t cmd = 0x4e584e43u, a0 = modern ? 0x01000001u : 0x01000000u, a1 = modern ? 0x100000u : 4096;
-	memcpy(h + 24, banner, n);
-	h[0] = cmd; h[1] = cmd >> 8; h[2] = cmd >> 16; h[3] = cmd >> 24;
-	h[4] = a0; h[5] = a0 >> 8; h[6] = a0 >> 16; h[7] = a0 >> 24;
-	h[8] = a1; h[9] = a1 >> 8; h[10] = a1 >> 16; h[11] = a1 >> 24;
-	h[12] = n; h[13] = n >> 8; h[14] = n >> 16; h[15] = n >> 24;
-	uint32_t ck = adb_sum(h + 24, n);
-	h[16] = ck; h[17] = ck >> 8; h[18] = ck >> 16; h[19] = ck >> 24;
-	uint32_t mg = cmd ^ 0xffffffffu;
-	h[20] = mg; h[21] = mg >> 8; h[22] = mg >> 16; h[23] = mg >> 24;
-	/* adb sends the header and the payload as two USB transfers; adbd reads
-	 * the 24-byte header on its own, so one 31-byte packet overflows that
-	 * read and is dropped. Payload follows from the header's completion. */
+	memcpy(h + ADB_HDR_LEN, banner, n);
+	put_le32(h, A_CNXN);
+	put_le32(h + 4, modern ? 0x01000001u : 0x01000000u);
+	put_le32(h + 8, modern ? 0x100000u : 4096);
+	put_le32(h + 12, n);
+	put_le32(h + 16, adb_data_check(h + ADB_HDR_LEN, n));
+	put_le32(h + 20, A_CNXN ^ 0xffffffffu);
+	/* adbd reads the header on its own, so the header and the payload go as
+	 * two USB transfers, the payload from the header's completion. */
 	cnxn_payload_len = n;
-	tuh_xfer_t x = { .daddr = s->daddr, .ep_addr = s->ep_out, .buflen = 24, .buffer = test_buf,
+	tuh_xfer_t x = { .daddr = s->daddr, .ep_addr = s->ep_out, .buflen = ADB_HDR_LEN, .buffer = test_buf,
 			 .complete_cb = cnxn_hdr_done, .user_data = 0 };
 	test_t0 = time_us();
 	return tuh_edpt_xfer(&x) ? 0 : -2;
