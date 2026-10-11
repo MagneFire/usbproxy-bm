@@ -554,12 +554,19 @@ static void w2h_fill(struct slot *s)
 	}
 }
 
-static void w2h_submit(struct slot *s, int i, uint32_t off, uint32_t len, bool partial)
+static bool w2h_submit(struct slot *s, int i, uint32_t off, uint32_t len, bool partial)
 {
 	struct dir *d = &s->w2h;
 	d->draining = i; d->partial = partial;
 	d->t_drain_sub = time_us();
-	usbd_edpt_xfer(0, s->g_in, d->buf[i] + off, (uint16_t)len, false);
+	if (!usbd_edpt_xfer(0, s->g_in, d->buf[i] + off, (uint16_t)len, false)) {
+		/* the stack refuses a busy (halted) endpoint: no completion would
+		 * ever free the buffer, so hand it back and let the next event retry */
+		d->draining = -1; d->partial = false;
+		log_printf("bridge: slot %d gadget IN submit failed\n", (int)(s - slots));
+		return false;
+	}
+	return true;
 }
 
 static void w2h_drain(struct slot *s)
@@ -575,7 +582,8 @@ static void w2h_drain(struct slot *s)
 		}
 		d->hand_us += time_us() - d->t_fill_done; d->hand_n++;
 		d->state[i] = B_DRAINING;
-		w2h_submit(s, i, d->off[i], d->len[i] - d->off[i], false);
+		if (!w2h_submit(s, i, d->off[i], d->len[i] - d->off[i], false))
+			d->state[i] = B_FULL;
 		return;
 	}
 }
@@ -623,7 +631,8 @@ static void w2h_drain_partial(struct slot *s)
 	 * (64-128 stale bytes at packet starts otherwise; the completion path
 	 * gets the same from the hcd's invalidate on completion). */
 	dcache_invalidate_range(d->buf[i] + off, landed - off);
-	w2h_submit(s, i, off, landed - off, true);
+	if (!w2h_submit(s, i, off, landed - off, true))
+		d->fwd = off;
 }
 
 static void w_in_cb(tuh_xfer_t *x)
