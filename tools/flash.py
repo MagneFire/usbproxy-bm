@@ -90,12 +90,13 @@ def fel_request(console):
     nodes = [console] if console else console_nodes()
     if not nodes:
         die(f"no FEL device and no console ({CONSOLE_GLOB}); is the board plugged in?")
-    out = console_cmd(nodes[0], "fel", 0.5)
-    if "fel requested" not in out:
-        die(f"{nodes[0]} did not answer the `fel` command like the firmware would:\n{out[-300:]}")
+    try:
+        out = console_cmd(nodes[0], "fel", 0.5)
+    except Exception as e:      # the node dies with the reset; that is fine
+        out = str(e)
     say(f"asked the firmware on {nodes[0]} for FEL")
-    if not fel_wait(30):
-        die("no FEL device within 30 s")
+    if not fel_wait(30 if "fel requested" in out else 10):
+        die(f"no FEL device appeared; the console answered:\n{out[-300:]}")
 
 
 def fel_write(addr, data, what):
