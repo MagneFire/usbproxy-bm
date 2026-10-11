@@ -8,6 +8,7 @@
 #include "host/hcd.h"
 #include "ehci_api.h"
 #include "ehci_h3.h"
+#include "hcd_h3.h"
 #include "usbphy.h"
 
 #define EHCI_CAP        (H3_EHCI1 + 0x00)

@@ -17,7 +17,6 @@ unsigned long strtoul(const char *s, char **end, int base);
 /* log ring (console/log.c): DRAM, uncached, survives a warm reset */
 void log_init(void);
 void log_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-void log_write(const char *s, size_t n);
 uint32_t log_total(void);
 void log_dump_at(uint32_t from, size_t n, void (*out)(const char *));
 void log_dump(size_t last, void (*out)(const char *));
@@ -38,4 +37,6 @@ extern int g_up;                /* 1 once GP1 has been cleared */
 extern bool g_manual_detach;    /* console `detach`: no automatic re-present */
 extern uint32_t g_represents, g_fs_retries;
 extern bool g_wdt_withheld;
+extern uint32_t g_loops_ps, g_wfis_ps, g_busy_us_ps;   /* last second, for `status` */
+extern bool g_power_auto;       /* clocks follow the bridge (console `powerauto`) */
 #endif

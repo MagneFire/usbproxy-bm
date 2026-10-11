@@ -4,6 +4,7 @@
 #include "gitrev.h"            /* generated: build/gitrev.h */
 #include "tusb.h"
 #include "usb/host_mgr.h"
+#include "usb/hcd_h3.h"
 #include "bridge/bridge.h"
 
 uint32_t g_entry_ms;
@@ -14,8 +15,7 @@ int g_up;
  * feeding the watchdog and the board resets 8 s later with a fault record.
  * The musb's FRNUM only drives the gadget bus log below. Console `hangusb`
  * halts the EHCI to prove it. */
-#define USBC_FRNUM      (0x01c19000u + 0x54)
-#define EHCI1_FRINDEX   (0x01c1b010u + 0x0c)
+#define USBC_FRNUM      (H3_MUSB + 0x54)
 bool g_wdt_withheld;		/* the gate stopped feeding: nothing else may */
 static bool usb_progress_ok(void)
 {
@@ -174,7 +174,6 @@ int main(void)
 		 * wakes on a pending IRQ regardless of CPSR.I). An unconditional
 		 * wfi here parked every completion that arrived during the task
 		 * pass until the next interrupt, up to one SOF period (125 us). */
-		extern void hcd_h3_poll(void);
 		hcd_h3_poll();
 		bridge_poll();
 		loops++;

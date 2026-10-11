@@ -4,12 +4,10 @@
 #include "host/usbh_pvt.h"
 #include "host/hcd.h"
 #include "ehci_h3.h"
+#include "hcd_h3.h"
 #include "host_mgr.h"
 #include "bridge/bridge.h"
 #include "bridge/adb_proto.h"
-
-uint32_t hcd_h3_portsc(void);
-void hcd_h3_portsc_write(uint32_t v);
 
 #define PORTSC_W1C      (BIT(1) | BIT(3) | BIT(5))
 #define PORTSC_CCS      BIT(0)

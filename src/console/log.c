@@ -44,7 +44,7 @@ void log_init(void)
 	}
 }
 
-void log_write(const char *s, size_t n)
+static void log_write(const char *s, size_t n)
 {
 	for (size_t i = 0; i < n; i++) {
 		uart_putc(s[i]);

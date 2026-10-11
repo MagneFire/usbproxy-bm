@@ -8,6 +8,8 @@
 #include "tusb.h"
 #include "dcd_h3.h"
 #include "ehci_h3.h"
+#include "usb/hcd_h3.h"
+#include "usb/usbphy.h"
 #include "usb/gadget_slots.h"
 #include "usb/host_mgr.h"
 #include "bridge/bridge.h"
@@ -92,7 +94,6 @@ static void cmd_status(void)
 		GITREV, gadget_serial(), (unsigned long)time_ms(), (unsigned long)g_entry_ms,
 		(unsigned long)tick_count(), (unsigned long)log_boots(), g_up);
 	con_out(buf);
-	extern uint32_t g_loops_ps, g_wfis_ps, g_busy_us_ps;
 	snprintf(buf, sizeof buf, "idle=loops:%lu wfis:%lu busy_us:%lu (per s)\n",
 		 (unsigned long)g_loops_ps, (unsigned long)g_wfis_ps, (unsigned long)g_busy_us_ps);
 	con_out(buf);
@@ -213,7 +214,6 @@ static void run(char *s)
 		int on = argv[2][0] == '1';
 		if (argv[1][0] == 'g') led_green(on); else led_red(on);
 	} else if (!strcmp(c, "ehci")) {
-		extern void hcd_h3_dump(void (*)(const char *));
 		hcd_h3_dump(con_out);
 	} else if (!strcmp(c, "hostxfer") && argc > 1 && !strcmp(argv[1], "cnxn")) {
 		int r = host_test_cnxn(argc > 2 && argv[2][0] == 'm');
@@ -239,7 +239,7 @@ static void run(char *s)
 		bridge_stats_reset();
 	} else if (!strcmp(c, "hangusb")) {
 		/* halt the EHCI: FRINDEX stops, the progress gate must reset the board */
-		clrbits(0x01c1b010u, 1u);
+		clrbits(EHCI1_USBCMD, 1u);
 		con_out("ehci halted; expect a watchdog reset in ~10 s\n");
 	} else if (!strcmp(c, "hostcycle")) {
 		host_cycle_start(argc > 1 ? (unsigned)strtoul(argv[1], 0, 0) : 1);
@@ -262,17 +262,14 @@ static void run(char *s)
 	} else if (!strcmp(c, "sofirq") && argc > 1) {
 		dcd_h3_sof_irq(strtoul(argv[1], 0, 0) != 0);
 	} else if (!strcmp(c, "cpuclk")) {
-		extern void ccu_set_cpu_mhz(unsigned); extern unsigned ccu_cpu_mhz(void);
 		if (argc > 1) ccu_set_cpu_mhz((unsigned)strtoul(argv[1], 0, 0));
 		snprintf(buf, sizeof buf, "cpu=%u MHz\n", ccu_cpu_mhz());
 		con_out(buf);
 	} else if (!strcmp(c, "powerauto")) {
-		extern bool g_power_auto;
 		if (argc > 1) g_power_auto = strtoul(argv[1], 0, 0) != 0;
 		snprintf(buf, sizeof buf, "powerauto=%d\n", g_power_auto);
 		con_out(buf);
 	} else if (!strcmp(c, "hostoff")) {
-		extern void usbphy1_off(void);
 		log_printf("hostoff: EHCI1/OHCI1/PHY1 off until the next reboot (power measurement)\n");
 		usbphy1_off();
 	} else if (!strcmp(c, "detach")) {
