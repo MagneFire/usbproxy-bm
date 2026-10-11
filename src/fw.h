@@ -6,7 +6,6 @@
 #include <stdbool.h>
 #include "h3/h3.h"
 
-#include "gitrev.h"            /* generated: build/gitrev.h */
 #define IMAGE_BASE ((uintptr_t)_start)
 extern char _start[];
 

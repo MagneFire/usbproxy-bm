@@ -4,6 +4,7 @@
  * lines. */
 #include <string.h>
 #include "fw.h"
+#include "gitrev.h"            /* generated: build/gitrev.h */
 #include "tusb.h"
 #include "usb/gadget_slots.h"
 #include "usb/host_mgr.h"

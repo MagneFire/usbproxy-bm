@@ -44,14 +44,15 @@ LDFLAGS := -nostdlib -T ld/fw.ld -Wl,--gc-sections -Wl,--no-warn-rwx-segments -W
 all: $(BUILD)/fw.bin size boot0 felflash
 
 # The build id lives in a generated header, rewritten at parse time only when
-# it changes, so the objects that print it rebuild when the tree moves (a -D
-# on the command line left stale "a849d72+" strings in a newer binary once;
-# a phony-driven rule for the header never retriggered under Apple's make).
+# it changes, so the objects that include it rebuild (-MMD) when the tree
+# moves (a -D on the command line left stale "a849d72+" strings in a newer
+# binary once; a phony-driven rule for the header never retriggered under
+# Apple's make).
 GITREV_H := $(shell mkdir -p $(BUILD); echo '\#define GITREV "$(GITREV)$(DIRTY)"' > $(BUILD)/gitrev.h.tmp; \
             cmp -s $(BUILD)/gitrev.h.tmp $(BUILD)/gitrev.h || mv -f $(BUILD)/gitrev.h.tmp $(BUILD)/gitrev.h; \
             rm -f $(BUILD)/gitrev.h.tmp; echo $(BUILD)/gitrev.h)
 
-$(BUILD)/%.c.o: %.c $(BUILD)/gitrev.h
+$(BUILD)/%.c.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -c $< -o $@
 
@@ -83,7 +84,7 @@ BOOT0_SRCS := src/boot0/start.S src/h3/cache.S src/boot0/main.c src/h3/clock.c \
 BOOT0_OBJS := $(patsubst %,$(BUILD)/boot0/%.o,$(BOOT0_SRCS))
 BOOT0_LDFLAGS := -nostdlib -T ld/boot0.ld -Wl,--gc-sections -Wl,--no-warn-rwx-segments -Wl,-Map=$(BUILD)/boot0.map
 
-$(BUILD)/boot0/%.c.o: %.c $(BUILD)/gitrev.h
+$(BUILD)/boot0/%.c.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -DBOOT0 -MMD -c $< -o $@
 

@@ -1,6 +1,7 @@
 /* usbproxy-bm: the superloop. M0 = runtime skeleton: UART console, watchdog,
  * RTC stamps/guards, log ring, MMU, GIC + 1 ms tick, LEDs. */
 #include "fw.h"
+#include "gitrev.h"            /* generated: build/gitrev.h */
 #include "tusb.h"
 #include "usb/host_mgr.h"
 #include "bridge/bridge.h"
