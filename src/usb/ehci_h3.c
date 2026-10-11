@@ -2,7 +2,8 @@
  * 2019 Ha Thach) for the Allwinner H3's standard EHCI (usbproxy-bm). H3
  * changes: port speed derived from PORTSC (no NXP field), no NXP TT control
  * register, a busy-endpoint guard in hcd_edpt_xfer, and the companion
- * handover flag for the host manager. Look for "H3". */
+ * handover flag for the host manager; the NXP and HPM branches are gone.
+ * Look for "H3". */
 volatile int ehci_h3_port_handed_over;
 /*
  * The MIT License (MIT)
@@ -45,15 +46,6 @@ volatile int ehci_h3_port_handed_over;
 #include "ehci_api.h"
 #include "ehci.h"
 
-// NXP specific fixes
-#if TU_CHECK_MCU(OPT_MCU_MIMXRT1XXX, OPT_MCU_LPC55, OPT_MCU_MCXN9, OPT_MCU_RW61X)
-#include "fsl_device_registers.h"
-#endif
-
-#if TU_CHECK_MCU(OPT_MCU_HPM)
-#include "ci_hs_hpm.h"
-#endif
-
 //--------------------------------------------------------------------+
 // MACRO CONSTANT TYPEDEF
 //--------------------------------------------------------------------+
@@ -61,17 +53,9 @@ volatile int ehci_h3_port_handed_over;
 // Debug level of EHCI
 #define EHCI_DBG     2
 
-// Framelist size as small as possible to save SRAM
-#ifdef TUP_USBIP_CHIPIDEA_HS
-  // NXP Transdimension: 8 elements
-  #define FRAMELIST_SIZE_BIT_VALUE      7u
-  #define FRAMELIST_SIZE_USBCMD_VALUE   (((FRAMELIST_SIZE_BIT_VALUE &  3) << EHCI_USBCMD_FRAMELIST_SIZE_SHIFT) | \
-                                         ((FRAMELIST_SIZE_BIT_VALUE >> 2) << EHCI_USBCMD_CHIPIDEA_FRAMELIST_SIZE_MSB_SHIFT))
-#else
-  // STD EHCI: 256 elements
-  #define FRAMELIST_SIZE_BIT_VALUE      2u
-  #define FRAMELIST_SIZE_USBCMD_VALUE   ((FRAMELIST_SIZE_BIT_VALUE &  3) << EHCI_USBCMD_FRAMELIST_SIZE_SHIFT) /* H3: upstream names a macro that does not exist */
-#endif
+// Framelist size as small as possible to save SRAM: 256 elements
+#define FRAMELIST_SIZE_BIT_VALUE      2u
+#define FRAMELIST_SIZE_USBCMD_VALUE   ((FRAMELIST_SIZE_BIT_VALUE &  3) << EHCI_USBCMD_FRAMELIST_SIZE_SHIFT)
 
 #define FRAMELIST_SIZE                  (1024 >> FRAMELIST_SIZE_BIT_VALUE)
 
@@ -195,36 +179,6 @@ static void ehci_enable_schedule(ehci_registers_t* regs, bool is_period) {
   }
 }
 
-#if ((defined FSL_FEATURE_SOC_USBPHY_COUNT) && (FSL_FEATURE_SOC_USBPHY_COUNT > 0U))
-static void nxp_usbphy_disconn_detector_set(uint8_t port, bool enable) {
-  // unify naming convention
-#if !defined(USBPHY1) && defined(USBPHY)
-  #define USBPHY1 USBPHY
-#endif
-
-  if (port == 0) {
-    if (enable) {
-      USBPHY1->CTRL_SET = USBPHY_CTRL_ENHOSTDISCONDETECT_MASK;
-    } else {
-      USBPHY1->CTRL_CLR = USBPHY_CTRL_ENHOSTDISCONDETECT_MASK;
-    }
-  }
-#if FSL_FEATURE_SOC_USBPHY_COUNT > 1U
-  else if (port == 1) {
-    if (enable) {
-      USBPHY2->CTRL_SET = USBPHY_CTRL_ENHOSTDISCONDETECT_MASK;
-    } else {
-      USBPHY2->CTRL_CLR = USBPHY_CTRL_ENHOSTDISCONDETECT_MASK;
-    }
-  }
-#endif
-
-#if !defined(USBPHY1) && defined(USBPHY)
-  #undef USBPHY1
-#endif
-}
-#endif
-
 //--------------------------------------------------------------------+
 // HCD API
 //--------------------------------------------------------------------+
@@ -247,14 +201,6 @@ void hcd_port_reset(uint8_t rhport) {
   // mask out Write-1-to-Clear bits
   uint32_t portsc = regs->portsc & ~EHCI_PORTSC_MASK_W1C;
 
-#if TU_CHECK_MCU(OPT_MCU_HPM)
-  if (usb_phy_get_line_state((USB_Type *)CI_HS_REG(rhport)) == usb_line_state2) {
-      portsc |= USB_PORTSC1_STS_MASK;
-  } else {
-      portsc &= ~USB_PORTSC1_STS_MASK;
-  }
-#endif
-
   // EHCI Table 2-16 PortSC
   // when software writes Port Reset bit to a one, it must also write a zero to the Port Enable bit.
   portsc &= ~(EHCI_PORTSC_MASK_PORT_EANBLED);
@@ -275,13 +221,6 @@ void hcd_port_reset_end(uint8_t rhport) {
 
     regs->portsc = portsc;
   }
-
-#if ((defined FSL_FEATURE_SOC_USBPHY_COUNT) && (FSL_FEATURE_SOC_USBPHY_COUNT > 0U))
-    // Enable disconnect detector for highspeed device only
-    if (hcd_port_speed_get(rhport) == TUSB_SPEED_HIGH) {
-      nxp_usbphy_disconn_detector_set(rhport, true);
-    }
-#endif
 }
 
 bool hcd_port_connect_status(uint8_t rhport) {
@@ -587,6 +526,7 @@ bool hcd_edpt_abort_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr) {
 
   // TODO ISO not supported yet
   ehci_qhd_t* qhd = qhd_get_from_addr(dev_addr, ep_addr);
+  TU_VERIFY(qhd != NULL);
   ehci_qtd_t * volatile qtd = qhd->attached_qtd;
   TU_VERIFY(qtd != NULL); // no queued transfer
 
@@ -617,6 +557,7 @@ bool hcd_edpt_abort_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr) {
 bool hcd_edpt_clear_stall(uint8_t rhport, uint8_t daddr, uint8_t ep_addr) {
   (void) rhport;
   ehci_qhd_t *qhd = qhd_get_from_addr(daddr, ep_addr);
+  TU_VERIFY(qhd != NULL);
   qhd->qtd_overlay.halted = 0;
   qhd->qtd_overlay.data_toggle = 0;
   hcd_dcache_clean_invalidate(qhd, sizeof(ehci_qhd_t));
@@ -666,10 +607,6 @@ void port_connect_status_change_isr(uint8_t rhport) {
      * enabling high speed, which the firmware sees as a disconnect. The host
      * manager takes the port back after a delay (kernel patch 0012's reclaim). */
     ehci_h3_port_handed_over = ehci_data.regs->portsc_bm.port_owner;
-#if ((defined FSL_FEATURE_SOC_USBPHY_COUNT) && (FSL_FEATURE_SOC_USBPHY_COUNT > 0U))
-    // Disable disconnect detector
-    nxp_usbphy_disconn_detector_set(rhport, false);
-#endif
     hcd_event_device_remove(rhport, true);
   }
 }
