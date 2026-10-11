@@ -23,6 +23,7 @@ struct dir {
 	uint32_t seq[BRIDGE_NBUF];	/* fill order */
 	uint8_t tag[BRIDGE_NBUF];	/* what the buffer holds, for the cycle stamps */
 	bool hdr[BRIDGE_NBUF];		/* watch IN: the buffer is an adb header */
+	bool zlp[BRIDGE_NBUF];		/* host OUT: a zero-length packet ended it, forward one after it */
 	bool resync;			/* watch IN: drop buffers until a header (gadget reconnected) */
 	uint32_t off[BRIDGE_NBUF];	/* bytes already forwarded early (cut-through) */
 	volatile uint32_t progress;	/* landed bytes of the filling buffer */
@@ -354,6 +355,7 @@ static int any_empty(struct dir *d)
 static void dir_fill_armed(struct dir *d, int i)
 {
 	d->state[i] = B_FILLING; d->filling = i;
+	d->zlp[i] = false;
 	d->off[i] = 0; d->fwd = 0; d->progress = 0;
 	d->t_fill_sub = time_us();
 }
@@ -407,8 +409,11 @@ static void h2w_drain(struct slot *s)
 		int i = oldest_full(d);
 		if (i < 0) return;
 		if (d->off[i] >= d->len[i] && d->len[i] != 0) {	/* everything went out early */
-			d->state[i] = B_EMPTY;
-			continue;
+			if (!d->zlp[i]) {
+				d->state[i] = B_EMPTY;
+				continue;
+			}
+			d->zlp[i] = false; d->off[i] = d->len[i] = 0;	/* its zero-length packet is left */
 		}
 		d->hand_us += time_us() - d->t_fill_done; d->hand_n++;
 		d->state[i] = B_DRAINING;
@@ -479,6 +484,10 @@ void bridge_gadget_out_done(int sl, uint32_t len)
 		return;
 	}
 	i = dir_fill_complete(d, len);
+	/* fastboot: a read that ended short on a whole packet was ended by a
+	 * zero-length packet; the watch may need it to end its own read */
+	uint32_t mps = tud_speed_get() == TUSB_SPEED_HIGH ? 512 : 64;
+	d->zlp[i] = s != &slots[0] && len && len < chunk && len % mps == 0;
 	d->t_fill_done = time_us();
 	if (s == &slots[0]) cyc_fill_done(true, d, i, len, d->t_fill_done);
 	h2w_drain(s);
@@ -503,8 +512,13 @@ void bridge_watch_out_done(int sl, uint32_t len, int result)
 	if (result != XFER_RESULT_SUCCESS)
 		log_printf("bridge: slot %d watch OUT result %d (%lu)\n", sl, result, (unsigned long)len);
 	if (s == &slots[0]) cyc_drain_done(true, d, i, now);
-	if (!partial)
+	if (!partial && d->zlp[i]) {
+		/* the data is out, its zero-length packet next (oldest_full: it keeps its seq) */
+		d->zlp[i] = false; d->off[i] = d->len[i] = 0;
+		d->state[i] = B_FULL;
+	} else if (!partial) {
 		d->state[i] = B_EMPTY;
+	}
 	/* partial: the buffer is still FILLING (more to come) or already FULL
 	 * with its remainder, which h2w_drain picks up (or frees) below. */
 	h2w_drain(s);
