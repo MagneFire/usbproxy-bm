@@ -74,6 +74,7 @@ typedef struct
   uint32_t     dpb_tx_waits, dpb_tx_early, dpb_rx_extra, tx_busy_irqs; /* H3 DPB counters (console status) */
   uint32_t     fifo_rd_us, fifo_rd_n, fifo_wr_us, fifo_wr_n;            /* PIO copy cost, packets >= 256 B */
   uint16_t     in_zlp_pending;      /* H3: bitmap, a zero-length IN transfer still to be sent */
+  uint16_t     rx_held;             /* H3: bitmap, the OUT packet in the FIFO was read (back-pressure) */
 } dcd_data_t;
 
 /*------------------------------------------------------------------
@@ -873,7 +874,9 @@ static bool handle_xfer_out(uint_fast8_t ep_addr)
       dcd_h3_out_progress(ep_addr, pipe->length - pipe->remaining);
   }
   if ((len < mps) || (rem == len)) {
+    /* the packet stays in the FIFO as back-pressure until the next arm */
     pipe->buf = NULL;
+    _dcd.rx_held |= (uint16_t)TU_BIT(epnum_minus1);
     return NULL != buf;
   }
   __USBC_Dev_Rx_Release();
@@ -907,12 +910,21 @@ static bool edpt_n_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t *buffer, uint16
     }
     handle_xfer_in(ep_addr);
   } else {
+    bool held = _dcd.rx_held & TU_BIT(epnum_minus1);
+    _dcd.rx_held &= (uint16_t)~TU_BIT(epnum_minus1);
     if (__USBC_Dev_Rx_IsReadDataReady()) {
-      /* Release the packet the previous transfer left as back-pressure. With
-       * DPB the next one may be waiting behind it: take it now, its interrupt
-       * came and went while nothing was armed. */
-      __USBC_Dev_Rx_Release();
       bool completed = false;
+      if (held) {
+        /* Release the packet the previous transfer left as back-pressure.
+         * With DPB the next one may be waiting behind it: take it now, its
+         * interrupt came and went while nothing was armed. */
+        __USBC_Dev_Rx_Release();
+      } else {
+        /* Nobody read this one: it came while nothing was armed (a DMA
+         * transfer leaves none held, AUTOCLEAR frees every packet the DMA
+         * read). It is this transfer's first. */
+        completed = handle_xfer_out(ep_addr);
+      }
       while (!completed && pipe->buf && rx_more) {
         _dcd.dpb_rx_extra++;
         completed = handle_xfer_out(ep_addr);
@@ -1138,6 +1150,7 @@ static void process_bus_reset(uint8_t rhport)
   for (unsigned ch = 0; ch < 2; ch++) if (dma_ch[ch].active) dma_stop(ch);
   memset(_dcd.pipe, 0, sizeof _dcd.pipe);
   _dcd.in_zlp_pending = 0;
+  _dcd.rx_held = 0;
 
   USBC_Writew(1, USBC_REG_INTTxE(USBC0_BASE)); /* Enable only EP0 */
   USBC_Writew(0, USBC_REG_INTRxE(USBC0_BASE));
@@ -1312,6 +1325,7 @@ bool dcd_edpt_open(uint8_t rhport, tusb_desc_endpoint_t const * ep_desc)
   } else {
     USBC_Writew(mps, USBC_REG_RXMAXP(USBC0_BASE));
 
+    _dcd.rx_held &= (uint16_t)~TU_BIT(epn - 1);
     reg_val = (1 << USBC_BP_RXCSR_D_FLUSH_FIFO)
       | (1 << USBC_BP_RXCSR_D_CLEAR_DATA_TOGGLE);
     if  (xfer == TUSB_XFER_ISOCHRONOUS)
@@ -1370,6 +1384,7 @@ void dcd_edpt_close_all(uint8_t rhport)
   for (unsigned ch = 0; ch < 2; ch++) if (dma_ch[ch].active) dma_stop(ch);
   USBC_Writew(1, USBC_REG_INTTxE(USBC0_BASE)); /* Enable only EP0 */
   USBC_Writew(0, USBC_REG_INTRxE(USBC0_BASE));
+  _dcd.rx_held = 0;
   for (unsigned i = 1; i < TUP_DCD_ENDPOINT_MAX; ++i) {
     USBC_SelectActiveEp(i);
     USBC_Writew(0, USBC_REG_TXMAXP(USBC0_BASE));
@@ -1406,6 +1421,7 @@ void dcd_edpt_close(uint8_t rhport, uint8_t ep_addr)
     USBC_Writeb(0, USBC_REG_TXFIFOSZ(USBC0_BASE));
   } else {
     USBC_INT_DisableRxEp(epn);
+    _dcd.rx_held &= (uint16_t)~TU_BIT(epn - 1);
     USBC_Writew(0, USBC_REG_RXMAXP(USBC0_BASE));
 	  USBC_Writew((1 << USBC_BP_RXCSR_D_CLEAR_DATA_TOGGLE) | (1 << USBC_BP_RXCSR_D_FLUSH_FIFO),
       USBC_REG_RXCSR(USBC0_BASE));
