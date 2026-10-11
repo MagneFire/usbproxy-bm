@@ -75,6 +75,7 @@ typedef struct
   uint32_t     fifo_rd_us, fifo_rd_n, fifo_wr_us, fifo_wr_n;            /* PIO copy cost, packets >= 256 B */
   uint16_t     in_zlp_pending;      /* H3: bitmap, a zero-length IN transfer still to be sent */
   uint16_t     rx_held;             /* H3: bitmap, the OUT packet in the FIFO was read (back-pressure) */
+  uint16_t     in_armed;            /* H3: bitmap, an IN transfer is in progress */
 } dcd_data_t;
 
 /*------------------------------------------------------------------
@@ -319,9 +320,11 @@ static void __USBC_Dev_ep0_WriteDataComplete(void)
 	USBC_REG_CSR0(USBC0_BASE));
 }
 
+/* keeps SEND_STALL: the byte write clears every other bit it leaves at 0 */
 static void __USBC_Dev_Tx_WriteDataComplete(void)
 {
-	USBC_Writeb((1 << USBC_BP_TXCSR_D_TX_READY), USBC_REG_TXCSR(USBC0_BASE));
+	u8 v = USBC_Readb(USBC_REG_TXCSR(USBC0_BASE)) & (1 << USBC_BP_TXCSR_D_SEND_STALL);
+	USBC_Writeb(v | (1 << USBC_BP_TXCSR_D_TX_READY), USBC_REG_TXCSR(USBC0_BASE));
 }
 
 __attribute__((unused)) static void __USBC_Dev_Rx_ReadDataComplete(void)
@@ -745,6 +748,7 @@ static void handle_dma_done(uint8_t rhport, unsigned ch)
   pipe->remaining = (uint16_t)(pipe->remaining - (moved > pipe->remaining ? pipe->remaining : moved));
   if (pipe->remaining == 0) {
     pipe->buf = NULL;
+    if (dir_in) _dcd.in_armed &= (uint16_t)~TU_BIT(epn - 1);
     dcd_event_xfer_complete(rhport, ep_addr, pipe->length, XFER_RESULT_SUCCESS, true);
     return;
   }
@@ -763,6 +767,8 @@ static bool handle_xfer_in(uint_fast8_t ep_addr)
   pipe_state_t  *pipe = &_dcd.pipe[tu_edpt_dir(ep_addr)][epnum_minus1];
   const unsigned rem  = pipe->remaining;
 
+  /* nothing armed: an interrupt for a transfer the halt cancelled */
+  if (!(_dcd.in_armed & TU_BIT(epnum_minus1))) return false;
   if (dma_ch[DMA_CHAN_TX].active && dma_ch[DMA_CHAN_TX].ep_addr == ep_addr) return false;
   if (!rem) {
     /* H3 fix: a zero-length transfer must still put one empty packet on
@@ -784,6 +790,7 @@ static bool handle_xfer_in(uint_fast8_t ep_addr)
       return false;
     }
     pipe->buf = NULL;
+    _dcd.in_armed &= (uint16_t)~TU_BIT(epnum_minus1);
     return true;
   }
 
@@ -898,6 +905,7 @@ static bool edpt_n_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t *buffer, uint16
   USBC_SelectActiveEp(tu_edpt_number(ep_addr));
 
   if (dir_in) {
+    _dcd.in_armed |= (uint16_t)TU_BIT(epnum_minus1);
     if (total_bytes == 0)
       _dcd.in_zlp_pending |= (uint16_t)TU_BIT(epnum_minus1);
     if ((dma_mask & 2) && epnum_minus1 == 0 && total_bytes >= DMA_MIN_BYTES && !dma_ch[DMA_CHAN_TX].active) {
@@ -1151,6 +1159,7 @@ static void process_bus_reset(uint8_t rhport)
   memset(_dcd.pipe, 0, sizeof _dcd.pipe);
   _dcd.in_zlp_pending = 0;
   _dcd.rx_held = 0;
+  _dcd.in_armed = 0;
 
   USBC_Writew(1, USBC_REG_INTTxE(USBC0_BASE)); /* Enable only EP0 */
   USBC_Writew(0, USBC_REG_INTRxE(USBC0_BASE));
@@ -1385,6 +1394,7 @@ void dcd_edpt_close_all(uint8_t rhport)
   USBC_Writew(1, USBC_REG_INTTxE(USBC0_BASE)); /* Enable only EP0 */
   USBC_Writew(0, USBC_REG_INTRxE(USBC0_BASE));
   _dcd.rx_held = 0;
+  _dcd.in_armed = 0;
   for (unsigned i = 1; i < TUP_DCD_ENDPOINT_MAX; ++i) {
     USBC_SelectActiveEp(i);
     USBC_Writew(0, USBC_REG_TXMAXP(USBC0_BASE));
@@ -1413,6 +1423,7 @@ void dcd_edpt_close(uint8_t rhport, uint8_t ep_addr)
   USBC_SelectActiveEp(epn);
   if (dir_in) {
     USBC_INT_DisableTxEp(epn);
+    _dcd.in_armed &= (uint16_t)~TU_BIT(epn - 1);
     USBC_Writew(0, USBC_REG_TXMAXP(USBC0_BASE));
 		USBC_Writew((1 << USBC_BP_TXCSR_D_MODE) | (1 << USBC_BP_TXCSR_D_CLEAR_DATA_TOGGLE) | (1 << USBC_BP_TXCSR_D_FLUSH_FIFO),
       USBC_REG_TXCSR(USBC0_BASE));
@@ -1486,6 +1497,24 @@ bool dcd_edpt_xfer_fifo(uint8_t rhport, uint8_t ep_addr, tu_fifo_t * ff, uint16_
 }
 
 // Stall endpoint
+/* A halt ends the IN transfer in progress (TinyUSB drops it on the clear,
+ * with no completion): stop its DMA and flush what it loaded, so nothing
+ * of it goes out once the halt is cleared. */
+static void in_cancel(uint8_t ep_addr)
+{
+  unsigned epnum_minus1 = tu_edpt_number(ep_addr) - 1;
+  pipe_state_t *pipe = &_dcd.pipe[TUSB_DIR_IN][epnum_minus1];
+  if (dma_ch[DMA_CHAN_TX].active && dma_ch[DMA_CHAN_TX].ep_addr == ep_addr) {
+    dma_stop(DMA_CHAN_TX);
+    tx_dma_csr_off();
+  }
+  if (USBC_REG_test_bit_w(USBC_BP_TXCSR_D_FIFO_NOT_EMPTY, USBC_REG_TXCSR(USBC0_BASE)))
+    USBC_Writeb((1 << USBC_BP_TXCSR_D_FLUSH_FIFO), USBC_REG_TXCSR(USBC0_BASE));
+  pipe->buf = NULL; pipe->length = pipe->remaining = 0;
+  _dcd.in_armed &= (uint16_t)~TU_BIT(epnum_minus1);
+  _dcd.in_zlp_pending &= (uint16_t)~TU_BIT(epnum_minus1);
+}
+
 void dcd_edpt_stall(uint8_t rhport, uint8_t ep_addr)
 {
   (void)rhport;
@@ -1500,6 +1529,7 @@ void dcd_edpt_stall(uint8_t rhport, uint8_t ep_addr)
     }
   } else {
     if (tu_edpt_dir(ep_addr)) { /* IN */
+      in_cancel(ep_addr);
       __USBC_Dev_Tx_SendStall();
     } else { /* OUT */
       TU_ASSERT(!__USBC_Dev_Rx_IsReadDataReady(),);
