@@ -46,6 +46,16 @@ static void __attribute__((noreturn)) enter_fel(unsigned why)
 	wdt_reset_now();
 }
 
+/* The uImage header the card boot trusts: size within the firmware's
+ * region, load/entry inside DRAM. The FEL card probe reads into DRAM with the
+ * same fields, so it applies the same checks. */
+static bool image_header_ok(const struct image_header *h)
+{
+	uint32_t fsize = be32(h->size), ep = be32(h->ep), load = be32(h->load);
+	return be32(h->magic) == IH_MAGIC && fsize != 0 && fsize <= FW_MAX_BYTES &&
+	       load >= H3_DRAM + 0x8000 && load <= H3_DRAM + (64u << 20) && ep == load;
+}
+
 static void __attribute__((noreturn)) boot_card(void)
 {
 	uint32_t t0 = time_ms();
@@ -79,8 +89,7 @@ static void __attribute__((noreturn)) boot_card(void)
 	struct image_header *h = (struct image_header *)H3_DRAM;
 	if (mmc_read(FW_SECTOR, 1, h)) { outf("boot0: header read failed\n"); enter_fel(WHY_MMC); }
 	uint32_t fsize = be32(h->size), ep = be32(h->ep), load = be32(h->load);
-	if (be32(h->magic) != IH_MAGIC || fsize == 0 || fsize > FW_MAX_BYTES ||
-	    load < H3_DRAM + 0x8000 || load > H3_DRAM + (64u << 20) || ep != load) {
+	if (!image_header_ok(h)) {
 		outf("boot0: no firmware image at sector 0x%lx (magic %08lx size %lu load %08lx)\n",
 		     (unsigned long)FW_SECTOR, (unsigned long)be32(h->magic), (unsigned long)fsize, (unsigned long)load);
 		enter_fel(WHY_BAD_IMAGE);
@@ -138,8 +147,10 @@ static void __attribute__((noreturn)) boot_fel(void)
 			     memcmp(egon + 1, "eGON.BT0", 8) ? "is not an eGON image" : "eGON.BT0", (unsigned long)egon[4]);
 		if (mmc_read(FW_SECTOR, 1, h))
 			outf("boot0: card: sector 0x%lx read failed\n", (unsigned long)FW_SECTOR);
-		else if (be32(h->magic) != IH_MAGIC)
-			outf("boot0: card: no uImage at sector 0x%lx\n", (unsigned long)FW_SECTOR);
+		else if (!image_header_ok(h))
+			outf("boot0: card: no usable uImage at sector 0x%lx (magic %08lx size %lu load %08lx)\n",
+			     (unsigned long)FW_SECTOR, (unsigned long)be32(h->magic), (unsigned long)be32(h->size),
+			     (unsigned long)be32(h->load));
 		else {
 			char name[33];
 			memcpy(name, h->name, 32); name[32] = 0;
