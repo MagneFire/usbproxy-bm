@@ -825,6 +825,10 @@ void hcd_int_handler(uint8_t rhport, bool in_isr) {
     // something seriously wrong, maybe forget to flush/invalidate cache
     TU_BREAKPOINT();
     TU_LOG1("  HC halted\r\n");
+    /* H3: a halted HC finishes nothing; mask and acknowledge, or the level
+     * IRQ fires forever. The main loop's progress gate sees FRINDEX stop. */
+    regs->inten = 0;
+    regs->status = int_status;
     return;
   }
 
