@@ -13,9 +13,14 @@ void ccu_uart0_enable(void)
 }
 
 /* CPU clock: PLL1 = 24 MHz * N * K / M, reprogrammed behind the 24 MHz
- * oscillator (boot0 sets 1008; console `cpuclk <MHz>`, multiples of 48). */
+ * oscillator (boot0 sets 1008; console `cpuclk <MHz>`, multiples of 48).
+ * 1008 is the most the boot voltage carries; N is 5 bits. */
+#define CPU_MHZ_MIN 120
+#define CPU_MHZ_MAX 1008
 void ccu_set_cpu_mhz(unsigned mhz)
 {
+	if (mhz < CPU_MHZ_MIN) mhz = CPU_MHZ_MIN;
+	if (mhz > CPU_MHZ_MAX) mhz = CPU_MHZ_MAX;
 	uintptr_t pll1 = H3_CCU + 0x000, cpu_axi = H3_CCU + 0x050;
 	unsigned k = 4, m = 2;                       /* U-Boot's choice for > 768 MHz: 24 * N * 4 / 2 */
 	if (mhz <= 768) { k = 1; m = 1; }            /* 24 * N, N <= 32 */
