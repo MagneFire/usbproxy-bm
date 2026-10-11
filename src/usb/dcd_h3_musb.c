@@ -82,63 +82,12 @@ typedef struct
  * SUNXI FUNCTION
  *------------------------------------------------------------------*/
 
-static void usb_phy_write(int addr, int data, int len)
-{
-	int j = 0, usbc_bit = 0;
-	void *dest = (void *)USBC_REG_CSR(USBC0_BASE);
-
-	/* H3/A33: the PHYCTL register must be written 0 first (Linux
-	 * sun4i_usb_phy_write, "SoCs newer than A33 need us to set phyctl to 0
-	 * explicitly"). */
-	USBC_Writel(0, dest);
-	usbc_bit = 1 << (0 * 2);
-	for (j = 0; j < len; j++)
-	{
-		/* set the bit address to be written */
-		USBC_ClrBit_Mask_l(dest, 0xff << 8);
-		USBC_SetBit_Mask_l(dest, (addr + j) << 8);
-
-		USBC_ClrBit_Mask_l(dest, usbc_bit);
-		/* set data bit */
-		if (data & 0x1)
-			USBC_SetBit_Mask_l(dest, 1 << 7);
-		else
-			USBC_ClrBit_Mask_l(dest, 1 << 7);
-
-		USBC_SetBit_Mask_l(dest, usbc_bit);
-
-		USBC_ClrBit_Mask_l(dest, usbc_bit);
-
-		data >>= 1;
-	}
-}
-
 static void USBC_HardwareReset(void)
 {
   /* H3: clocks, resets, PHY0 routing to musb and the PMU SIDDQ clear are in
    * usbphy.c (usbphy0_init), shared with the H3-specific bits the F1C100s
    * never had. */
   usbphy0_init();
-}
-
-static void USBC_PhyConfig(void)
-{
-	/* Regulation 45 ohms */
-	usb_phy_write(0x0c, 0x01, 1);
-
-	/* adjust PHY's magnitude and rate */
-	usb_phy_write(0x20, 0x14, 5);
-
-	/* threshold adjustment disconnect */
-	usb_phy_write(0x2a, 3, 2);
-
-	return;
-}
-
-static void USBC_ConfigFIFO_Base(void)
-{
-	/* H3: no SRAM controller FIFO mapping (the F1C100s claims an SRAM region
-	 * for the musb FIFO; the H3's 8 KiB FIFO RAM is internal). */
 }
 
 static unsigned int USBC_WakeUp_ClearChangeDetect(unsigned int reg_val)
@@ -1197,8 +1146,6 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
    * and a register access before USBC_HardwareReset() would abort. */
   USBC_HardwareReset();
   dcd_disconnect(rhport);
-  USBC_PhyConfig();
-  USBC_ConfigFIFO_Base();
   USBC_EnableDpDmPullUp();
   USBC_ForceIdToHigh(); // Force device mode
   USBC_ForceVbusValidToHigh();
