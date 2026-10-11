@@ -541,8 +541,13 @@ bool hcd_edpt_abort_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr) {
   // check active bit again just in case HC has just processed the TD
   bool const still_active = qtd->active;
   if (still_active) {
-    // remove TD from QH overlay
+    /* H3: retire the overlay too. Once the HC has copied the TD in, it
+     * keeps retrying from the overlay and would write the result back into
+     * a TD that the next transfer (the per-device control TD) reuses. */
     qhd->qtd_overlay.next.terminate = 1;
+    qhd->qtd_overlay.active = 0;
+    qhd->qtd_overlay.halted = 0;
+    qtd->active = 0;
     hcd_dcache_clean(qhd, sizeof(ehci_qhd_t));
 
     // remove TD from QH software list
