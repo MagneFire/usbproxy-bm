@@ -102,7 +102,7 @@ $(BUILD)/boot0.bin: $(BUILD)/boot0.elf tools/egon.py
 boot0: $(BUILD)/boot0.bin
 
 # felflash: writes a card region over FEL (after `sunxi-fel spl boot0.bin`
-# brought DRAM up); scripts/appliance.py bm flash drives it. Same objects as
+# brought DRAM up); tools/flash.py drives it. Same objects as
 # boot0, linked for DRAM.
 FELFLASH_SRCS := src/felflash/start.S src/felflash/main.c src/h3/mmc.c src/h3/uart.c \
                  src/h3/ccu.c src/h3/timer.c src/lib/libc.c src/lib/fmt.c src/lib/crc32.c

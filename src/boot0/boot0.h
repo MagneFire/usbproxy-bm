@@ -28,7 +28,7 @@ void clock_init(void);
 #define DRAM_CLK 312
 unsigned long dram_init(void);
 
-/* h3/mmc.c: SDC0, PIO, 4-bit at 24 MHz. 512-byte sectors. */
+/* h3/mmc.c: SDC0, PIO, 4-bit at 25 MHz. 512-byte sectors. */
 int mmc_init(void);                                     /* 0 = card ready */
 int mmc_read(uint32_t sector, uint32_t n, void *dst);   /* 0 = ok */
 int mmc_write(uint32_t sector, uint32_t n, const void *src);

@@ -26,10 +26,10 @@ void bridge_unbind(int slot);
 void bridge_watch_out_done(int slot, uint32_t len, int result);
 void bridge_watch_in_done(int slot, uint32_t len, int result);
 void bridge_status(char *buf, unsigned n);
-bool bridge_host_pending(void);
-void bridge_poll(void);
+bool bridge_host_pending(void);		/* an EHCI transfer is in flight: poll, do not sleep */
+void bridge_poll(void);			/* main loop: cut-through forwarding */
 void bridge_stats_reset(void);
-bool bridge_adb_pulsing(void);		/* adb IN halt pulse in progress */				/* main loop: cut-through forwarding */		/* an EHCI transfer is in flight: poll, do not sleep */
+bool bridge_adb_pulsing(void);		/* adb IN halt pulse in progress */
 /* Largest single transfer the datapath reads from either side (console
  * `chunk`): smaller chunks overlap the fill of one with the drain of the
  * previous at the price of more completions per message. */

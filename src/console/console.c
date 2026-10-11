@@ -176,9 +176,9 @@ static void run(char *s)
 		log_printf("reboot requested\n");
 		wdt_reset_now();
 	} else if (!strcmp(c, "fel")) {
-		/* This word in GP1 at reset sends boot0 (and the old U-Boot SPL,
-		 * patch 0004) into the BROM's FEL routine: sunxi-fel on the OTG
-		 * port, card untouched. `appliance.py bm flash/run` start here. */
+		/* This word in GP1 at reset sends boot0 into the BROM's FEL
+		 * routine: sunxi-fel on the OTG port, card untouched.
+		 * tools/flash.py's flash and run start here. */
 		log_printf("fel requested: GP1=FEL1 + reset\n");
 		if (cur == &con_cdc) {
 			/* the log goes to the UART only: answer here too (flash.py

@@ -69,7 +69,9 @@ uint32_t bridge_chunk(void) { return chunk; }
 static uint32_t cut_floor = 2048;	/* Mac->watch: forward only in pieces this large (console `cutfloor`) */
 void bridge_set_cut_floor(uint32_t b) { cut_floor = (b < 512 ? 512 : b > BRIDGE_BUF ? BRIDGE_BUF : b) & ~511u; }
 uint32_t bridge_cut_floor(void) { return cut_floor; }
-static uint32_t cut_mask = 2;	/* watch->Mac on; Mac->watch (2 KiB floor) measured no gain: the watch's OKAY time does not follow our delivery */	/* watch->Mac on; Mac->watch off: per-packet OUT transfers made the watch respond ~200 us later */		/* bit0: Mac->watch cut-through, bit1: watch->Mac (console `cut`) */
+/* bit0: Mac->watch cut-through, bit1: watch->Mac (console `cut`). Mac->watch
+ * is off: the watch's OKAY time does not follow our delivery. */
+static uint32_t cut_mask = 2;
 void bridge_set_cut(uint32_t m) { cut_mask = m & 3; }
 /* watch->Mac cut-through: stay cut_lag packets behind the EHCI overlay's
  * byte count (console `cutlag`). M3 blamed 64-128 stale bytes at packet

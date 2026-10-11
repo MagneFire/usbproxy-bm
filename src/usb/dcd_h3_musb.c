@@ -1143,10 +1143,9 @@ bool dcd_edpt_open(uint8_t rhport, tusb_desc_endpoint_t const * ep_desc)
     USBC_INT_EnableRxEp(epn);
   }
 
-  /* Setup FIFO. The adb pair (endpoint 1, the datapath) gets double packet
-   * buffering: the host can land/fetch the next packet while the CPU moves
-   * the previous one by PIO. 8 KiB of FIFO RAM: 64 (ep0) + 2*1024 (adb) +
-   * 3*2*512 (the rest) fits; doubling every endpoint would not. */
+  /* Setup FIFO. The adb OUT endpoint (endpoint 1, the datapath) gets double
+   * packet buffering: the host can land the next packet while the CPU reads
+   * the previous one. 8 KiB of FIFO RAM holds ep0 and the map below. */
   /* Static, size-aligned FIFO map instead of upstream's best-fit free list.
    * Byte offsets; code = log2(size)-3; DPB doubles the allocation. */
   static const struct { uint16_t addr; uint8_t code; uint8_t dpb; } fifo_map[TUP_DCD_ENDPOINT_MAX][2] = {

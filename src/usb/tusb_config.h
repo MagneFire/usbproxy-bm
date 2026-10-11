@@ -32,7 +32,8 @@
 #define CFG_TUH_MEM_SECTION     __attribute__((section(".dma")))
 #define CFG_TUH_MEM_ALIGN       __attribute__((aligned(64)))
 
-/* musb is PIO: ordinary cached RAM is fine for device buffers. */
+/* Device buffers are ordinary cached RAM: the musb copies by PIO, and the
+ * DCD cleans/invalidates around its inner DMA (whole 64-byte lines). */
 #define CFG_TUSB_MEM_ALIGN      __attribute__((aligned(4)))
 
 #endif

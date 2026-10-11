@@ -1,8 +1,7 @@
 /* SDC0 (the SD slot), PIO through the AHB, written from U-Boot's
  * sunxi_mmc.c (register map, command/transfer sequencing) and mmc.c (the SD
- * initialisation dialogue). 400 kHz 1-bit for the dialogue, 24 MHz 4-bit
- * from the 24 MHz oscillator for transfers: plenty for a 60 KiB firmware
- * and no PLL6 dependency. SDHC/SDXC (block addressing) and SDSC (byte
+ * initialisation dialogue). 400 kHz 1-bit for the dialogue, 25 MHz 4-bit
+ * from PLL6 for transfers. SDHC/SDXC (block addressing) and SDSC (byte
  * addressing) both handled; no MMC/eMMC, no high-speed switch. */
 #include "boot0/boot0.h"
 
@@ -84,7 +83,7 @@ static int update_clk(void)
 	return 0;
 }
 
-/* Module clock from the 24 MHz oscillator; U-Boot's delays for <= 25 MHz. */
+/* Module clock from the 24 MHz oscillator or PLL6; U-Boot's delays for <= 25 MHz. */
 static int set_clock(uint32_t hz, unsigned width)
 {
 	/* mod clock = src / 2^N / M, M <= 16; src = OSC24M up to 24 MHz, else

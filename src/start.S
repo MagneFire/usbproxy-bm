@@ -1,11 +1,10 @@
-/* Entry and exception vectors. Three ways in, one state out:
- *   SPL Falcon jump : MMU/caches off, secure SVC, r2 = DTB (ignored)
- *   U-Boot `go`     : MMU and D-cache ON, U-Boot's stack, r0/r1 = argc/argv
- *   FEL `exe`       : BROM state, caches off
- * We clean the D-cache while it may still be on, switch everything off,
- * invalidate, set our own stacks and vectors, clear .bss, write CNTFRQ (only
- * the Falcon SPL path does it for us, and a watchdog reset clears it), then
- * call main() with IRQs still masked; main enables them once the GIC is up. */
+/* Entry and exception vectors. Two ways in, one state out:
+ *   boot0 jump : MMU/caches off, secure SVC
+ *   FEL `exe`  : BROM state, caches off
+ * We clean the D-cache in case it is on, switch everything off, invalidate,
+ * set our own stacks and vectors, clear .bss, write CNTFRQ (only boot0 does
+ * it for us, and a watchdog reset clears it), then call main() with IRQs
+ * still masked; main enables them once the GIC is up. */
         .syntax unified
         .arm
 
@@ -24,17 +23,15 @@ _start:
         .text
 reset:
         cpsid   if
-        /* Clean+invalidate the D-cache whatever its state: after U-Boot's
-         * `go` it is on and holds this very image (loady wrote it through the
-         * cache); after the Falcon jump it is off but may hold stale clean
-         * lines. One DCCISW pass leaves it clean and empty, and nothing can
+        /* Clean+invalidate the D-cache whatever its state: off on both ways
+         * in, but it may hold stale clean lines. One DCCISW pass leaves it clean and empty, and nothing can
          * dirty it again before it is disabled below. (A second,
          * invalidate-only pass with the caches off hung the A7 at this point;
          * not needed, not done.) */
         bl      dcache_clean_invalidate_all
         /* Belt and braces: also clean+invalidate our own image by address
-         * (DCCIMVAC), line by line. The set/way pass above was observed NOT
-         * to land the loady'd image in DRAM on this A7 (2026-10-10). */
+         * (DCCIMVAC), line by line: the set/way pass alone did not always
+         * land a freshly written image in DRAM on this A7. */
         ldr     r0, =_start
         ldr     r1, =__ram_end
         bic     r0, r0, #63

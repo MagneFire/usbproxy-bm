@@ -7,7 +7,7 @@ void tusb_time_delay_ms_api(uint32_t ms) { delay_ms(ms); }
 
 void tud_mount_cb(void)
 {
-	/* "Up" for the SPL's purposes: the host configured the gadget. */
+	/* "Up" for boot0's death counter: the host configured the gadget. */
 	if (!g_up) {
 		rtc_gp_write(1, 0);
 		g_up = 1;

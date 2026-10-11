@@ -1,6 +1,6 @@
 /* Any exception is fatal: print and record it (log ring + RTC GP0 as
- * 0xFA<type><pc offset>), then watchdog-reset. The SPL sees GP1 still set if
- * this happens before we were up and hands the next boot to U-Boot proper. */
+ * 0xFA<type><pc offset>), then watchdog-reset. Before we were up, GP1 still
+ * holds boot0's death counter: three in a row and boot0 enters FEL. */
 #include "fw.h"
 
 static const char *const names[] = { "?", "undef", "svc", "pabt", "dabt", "fiq" };
