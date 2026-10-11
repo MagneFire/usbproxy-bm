@@ -50,11 +50,6 @@ typedef uint8_t u8;
 
 #define REQUEST_TYPE_INVALID  (0xFFu)
 
-typedef struct {
-  uint_fast16_t beg; /* offset of including first element */
-  uint_fast16_t end; /* offset of excluding the last element */
-} free_block_t;
-
 typedef struct TU_ATTR_PACKED
 {
   void      *buf;      /* the start address of a transfer data buffer */
@@ -157,11 +152,6 @@ static void USBC_SelectBus(u32 io_type, u32 ep_type, u32 ep_index)
 static void USBC_SelectActiveEp(u8 ep_index)
 {
 	USBC_Writeb(ep_index, USBC_REG_EPIND(USBC0_BASE));
-}
-
-static u8 USBC_GetActiveEp(void)
-{
-	return USBC_Readb(USBC_REG_EPIND(USBC0_BASE));
 }
 
 static void __USBC_Dev_ep0_SendStall(void)
@@ -276,11 +266,6 @@ static void __USBC_Dev_Tx_WriteDataComplete(void)
 	USBC_Writeb(v | (1 << USBC_BP_TXCSR_D_TX_READY), USBC_REG_TXCSR(USBC0_BASE));
 }
 
-__attribute__((unused)) static void __USBC_Dev_Rx_ReadDataComplete(void)
-{
-	USBC_Writeb(0, USBC_REG_RXCSR(USBC0_BASE));
-}
-
 static u32 __USBC_Dev_Rx_IsReadDataReady(void)
 {
 	return USBC_REG_test_bit_w(USBC_BP_RXCSR_D_RX_PKT_READY, USBC_REG_RXCSR(USBC0_BASE));
@@ -332,126 +317,6 @@ static void USBC_INT_DisableRxEp(u8 ep_index)
  *------------------------------------------------------------------*/
 
 CFG_TUD_MEM_ALIGN static dcd_data_t _dcd;
-
-static inline free_block_t *find_containing_block(free_block_t *beg, free_block_t *end, uint_fast16_t addr)
-{
-  free_block_t *cur = beg;
-  for (; cur < end && ((addr < cur->beg) || (cur->end <= addr)); ++cur) ;
-  return cur;
-}
-
-static inline int update_free_block_list(free_block_t *blks, unsigned num, uint_fast16_t addr, uint_fast16_t size)
-{
-  free_block_t *p = find_containing_block(blks, blks + num, addr);
-  TU_ASSERT(p != blks + num, -2);
-  if (p->beg == addr) {
-    /* Shrink block */
-    p->beg = addr + size;
-    if (p->beg != p->end) return 0;
-    /* remove block */
-    free_block_t *end = blks + num;
-    while (p + 1 < end) {
-      *p = *(p + 1);
-      ++p;
-    }
-    return -1;
-  } else {
-    /* Split into 2 blocks */
-    free_block_t tmp = {
-      .beg = addr + size,
-      .end = p->end
-    };
-    p->end = addr;
-    if (p->beg == p->end) {
-      if (tmp.beg != tmp.end) {
-        *p = tmp;
-        return 0;
-      }
-      /* remove block */
-      free_block_t *end = blks + num;
-      while (p + 1 < end) {
-        *p = *(p + 1);
-        ++p;
-      }
-      return -1;
-    }
-    if (tmp.beg == tmp.end) return 0;
-    blks[num] = tmp;
-    return 1;
-  }
-}
-
-static inline unsigned free_block_size(free_block_t const *blk)
-{
-  return blk->end - blk->beg;
-}
-
-#if 0
-static inline void print_block_list(free_block_t const *blk, unsigned num)
-{
-  TU_LOG1("*************\r\n");
-  for (unsigned i = 0; i < num; ++i) {
-    TU_LOG1(" Blk%u %u %u\r\n", i, blk->beg, blk->end);
-    ++blk;
-  }
-}
-#else
-#define print_block_list(a,b)
-#endif
-
-#define USB_FIFO_SIZE_KB 8   /* H3: ram_bits 11 (Linux sunxi.c) */
-
-__attribute__((unused)) static unsigned find_free_memory(uint_fast16_t size_in_log2_minus3)
-{
-  free_block_t free_blocks[2 * (TUP_DCD_ENDPOINT_MAX - 1)];
-  unsigned num_blocks = 1;
-  /* Backup current EP to restore later */
-  u8 backup_ep = USBC_GetActiveEp();
-
-  /* Initialize free memory block list */
-  free_blocks[0].beg = 64 / 8;
-  free_blocks[0].end = (USB_FIFO_SIZE_KB << 10) / 8; /* 2KiB / 8 bytes */
-  for (int i = 1; i < TUP_DCD_ENDPOINT_MAX; ++i) {
-    uint_fast16_t addr;
-    int num;
-    USBC_SelectActiveEp(i);
-    addr = USBC_Readw(USBC_REG_TXFIFOAD(USBC0_BASE));
-    if (addr) {
-      unsigned sz  = USBC_Readb(USBC_REG_TXFIFOSZ(USBC0_BASE));
-      unsigned sft = (sz & USB_TXFIFOSZ_SIZE_M) + ((sz & USB_TXFIFOSZ_DPB) ? 1: 0);
-      num = update_free_block_list(free_blocks, num_blocks, addr, 1 << sft);
-      TU_ASSERT(-2 < num, 0);
-      num_blocks += num;
-      print_block_list(free_blocks, num_blocks);
-    }
-    addr = USBC_Readw(USBC_REG_RXFIFOAD(USBC0_BASE));
-    if (addr) {
-      unsigned sz  = USBC_Readb(USBC_REG_RXFIFOSZ(USBC0_BASE));
-      unsigned sft = (sz & USB_RXFIFOSZ_SIZE_M) + ((sz & USB_RXFIFOSZ_DPB) ? 1: 0);
-      num = update_free_block_list(free_blocks, num_blocks, addr, 1 << sft);
-      TU_ASSERT(-2 < num, 0);
-      num_blocks += num;
-      print_block_list(free_blocks, num_blocks);
-    }
-  }
-  print_block_list(free_blocks, num_blocks);
-
-  USBC_SelectActiveEp(backup_ep);
-
-  /* Find the best fit memory block */
-  uint_fast16_t size_in_8byte_unit = 1 << size_in_log2_minus3;
-  free_block_t const *min = NULL;
-  uint_fast16_t    min_sz = 0xFFFFu;
-  free_block_t const *end = &free_blocks[num_blocks];
-  for (free_block_t const *cur = &free_blocks[0]; cur < end; ++cur) {
-    uint_fast16_t sz = free_block_size(cur);
-    if (sz < size_in_8byte_unit) continue;
-    if (size_in_8byte_unit == sz) return cur->beg;
-    if (sz < min_sz) min = cur;
-  }
-  TU_ASSERT(min, 0);
-  return min->beg;
-}
 
 static void pipe_write_packet(void *buff, volatile void *fifo, unsigned cnt)
 {
