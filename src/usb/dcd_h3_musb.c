@@ -843,6 +843,8 @@ static bool handle_xfer_out(uint_fast8_t ep_addr)
      * not take it) -- or a full one it has not fetched yet: leave that. */
     if (USBC_Readw(USBC_REG_RXCOUNT(USBC0_BASE)) >= mps) return false;
     uint32_t moved = dma_stop(DMA_CHAN_RX);
+    /* as in handle_dma_done: drop lines prefetched while the DMA wrote them */
+    if (moved) dcache_invalidate_range(pipe->buf, moved);
     rx_dma_csr_off();
     dma_rx_short++;
     pipe->buf = (uint8_t *)pipe->buf + moved;
