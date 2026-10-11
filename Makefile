@@ -8,15 +8,18 @@ OBJDUMP   := $(CROSS)objdump
 SIZE      := $(CROSS)size
 MKIMAGE   ?= mkimage
 SUNXI_FEL ?= $(HOME)/.local/bin/sunxi-fel
-FLASH     ?= uv run tools/flash.py     # FEL loader/flasher (needs sunxi-fel; uv fetches pyserial)
-SPL       ?= $(BUILD)/boot0.bin      # what `make fel` runs first to bring DRAM up (the U-Boot SPL still works here)
+# FEL loader/flasher (needs sunxi-fel; uv fetches pyserial)
+FLASH     ?= uv run tools/flash.py
+# what `make fel` runs first to bring DRAM up (the U-Boot SPL still works here)
+SPL       ?= $(BUILD)/boot0.bin
 
 BUILD   := build
 TUSB    := third_party/tinyusb/src
 GITREV  := $(shell git rev-parse --short=10 HEAD 2>/dev/null || echo nogit)
 DIRTY   := $(shell git diff --quiet HEAD 2>/dev/null || echo +)
 LOAD    := 0x40008000
-KSECTOR := 100352          # 0x18800, applib.KERNEL_SECTOR
+# 0x18800, applib.KERNEL_SECTOR
+KSECTOR := 100352
 
 SRCS := src/start.S src/h3/cache.S \
         src/main.c src/h3/uart.c src/h3/gic.c src/h3/timer.c src/h3/wdt.c \
@@ -122,7 +125,7 @@ felflash: $(BUILD)/felflash.bin
 # for DRAM, felflash for the sectors, a watchdog reset, the console's status).
 # `make flash BOOT0=1` rewrites boot0 at sector 16 as well.
 flash: uimage boot0 felflash
-	$(FLASH) flash $(BUILD)/fw.uimg $(if $(BOOT0),--boot0,)
+	$(FLASH) flash $(BUILD)/fw.uimg $(if $(filter-out 0,$(BOOT0)),--boot0,)
 
 # Dev loop: run a build from RAM over FEL, card untouched.
 run: $(BUILD)/fw.bin boot0
