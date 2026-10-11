@@ -404,7 +404,7 @@ static void h2w_drain(struct slot *s)
 	for (;;) {
 		int i = oldest_full(d);
 		if (i < 0) return;
-		if (d->off[i] >= d->len[i]) {		/* everything went out early */
+		if (d->off[i] >= d->len[i] && d->len[i] != 0) {	/* everything went out early */
 			d->state[i] = B_EMPTY;
 			continue;
 		}
