@@ -1031,12 +1031,16 @@ void dcd_disconnect(uint8_t rhport)
   USBC_REG_clear_bit_b(USBC_BP_POWER_D_SOFT_CONNECT, USBC_REG_PCTL(USBC0_BASE));
 }
 
+void dcd_h3_sof_irq(bool on)
+{
+  if (on) USBC_REG_set_bit_b(USBC_BP_INTUSBE_EN_SOF, USBC_REG_INTUSBE(USBC0_BASE));
+  else    USBC_REG_clear_bit_b(USBC_BP_INTUSBE_EN_SOF, USBC_REG_INTUSBE(USBC0_BASE));
+}
+
 void dcd_sof_enable(uint8_t rhport, bool en)
 {
   (void) rhport;
-  (void) en;
-
-  // TODO implement later
+  dcd_h3_sof_irq(en);
 }
 
 void dcd_int_enable(uint8_t rhport)
@@ -1410,9 +1414,3 @@ void dcd_int_handler(uint8_t rhport)
   }
 }
 #endif
-
-void dcd_h3_sof_irq(bool on)
-{
-  if (on) USBC_REG_set_bit_b(USBC_BP_INTUSBE_EN_SOF, USBC_REG_INTUSBE(USBC0_BASE));
-  else    USBC_REG_clear_bit_b(USBC_BP_INTUSBE_EN_SOF, USBC_REG_INTUSBE(USBC0_BASE));
-}
