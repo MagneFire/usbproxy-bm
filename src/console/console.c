@@ -53,8 +53,8 @@ static void cdc_puts(const char *s)
 	}
 }
 
-static struct con con_uart = { "uart", uart_puts, {0}, 0, false, 0 };
-static struct con con_cdc = { "cdc", cdc_puts, {0}, 0, false, 0 };
+static struct con con_uart = { "uart", uart_puts, {0}, 0, false, 0, false };
+static struct con con_cdc = { "cdc", cdc_puts, {0}, 0, false, 0, false };
 static struct con *cur = &con_uart;
 
 static void con_out(const char *s) { cur->puts(s); }
