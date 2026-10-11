@@ -1,5 +1,5 @@
-/* The only file that knows DRAM addresses. Keep it that way so the SRAM-only
- * variant (BARE-METAL.md section 6) is a linker-script change. */
+/* The only file that knows DRAM addresses. (An SRAM-only firmware was ruled
+ * out, BARE-METAL.md section 8c: the EHCI reaches DRAM only.) */
 MEMORY
 {
     IMG     (rwx) : ORIGIN = 0x40008000, LENGTH = 256K   /* SPL/U-Boot load + entry */
