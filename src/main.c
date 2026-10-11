@@ -91,7 +91,8 @@ int main(void)
 	gic_init();
 	timer_init();
 	led_init();
-	led_red(1);
+	led_red(0);                     /* both LEDs stay off: power; console `led` drives them by hand */
+	led_green(0);
 	log_init();
 	log_printf("boot %lu: entry at %lu ms, gp0=%08lx gp1=%08lx gp2=%08lx gp3=%08lx wdt=%d\n",
 		   (unsigned long)log_boots(), (unsigned long)g_entry_ms,
@@ -121,7 +122,6 @@ int main(void)
 	log_printf("usb: host on EHCI1 initialised\n");
 
 	console_init();
-	uint32_t last_blink = 0;
 	for (;;) {
 		tud_task();
 		tuh_task();
@@ -130,11 +130,6 @@ int main(void)
 		if (usb_progress_ok())
 			wdt_feed();
 		gadget_present_check();
-		uint32_t t = tick_count();
-		if (t - last_blink >= 500) {
-			last_blink = t;
-			led_red((t / 500) & 1);	/* red status LED: alive */
-		}
 		/* Sleep only when nothing is queued, decided with IRQs masked so an
 		 * event raised between the check and the wfi still wakes us (WFI
 		 * wakes on a pending IRQ regardless of CPSR.I). An unconditional
