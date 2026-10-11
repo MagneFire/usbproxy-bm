@@ -5,7 +5,7 @@
 # ///
 """Load or flash usbproxy-bm over the OTG cable through the BROM's FEL mode.
 
-    tools/flash.py flash build/fw.uimg [--boot0 build/boot0.bin]   write the card
+    tools/flash.py flash build/fw.uimg [--boot0]                   write the card
     tools/flash.py run   build/fw.bin                                run from RAM, card untouched
     tools/flash.py fel                                               into FEL and stay there
     tools/flash.py reset                                             leave FEL (watchdog reset)
@@ -44,9 +44,12 @@ def die(s):
     sys.exit(f"flash.py: {s}")
 
 
-def fel(*args, timeout=120):
-    r = subprocess.run([SUNXI_FEL, *args], capture_output=True, text=True, timeout=timeout)
-    return r.returncode, (r.stdout or "") + (r.stderr or "")
+def fel(*args, timeout=120, stdout_only=False):
+    try:
+        r = subprocess.run([SUNXI_FEL, *args], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return -1, f"sunxi-fel {args[0]} timed out after {timeout} s"
+    return r.returncode, (r.stdout or "") + ("" if stdout_only else (r.stderr or ""))
 
 
 def fel_present():
@@ -113,10 +116,11 @@ def fel_write(addr, data, what):
 
 
 def fel_readl(addr):
-    rc, out = fel("readl", f"0x{addr:x}", timeout=20)
-    if rc != 0:
+    rc, out = fel("readl", f"0x{addr:x}", timeout=20, stdout_only=True)
+    try:
+        return int(out.split()[-1], 16) if rc == 0 else None
+    except (IndexError, ValueError):
         return None
-    return int(out.strip().split()[-1], 16)
 
 
 def fel_exe(addr):
@@ -154,7 +158,8 @@ def flash_region(sector, data, what):
     ms = fel_readl(FELFLASH_CMD + 0x18)
     if st != 0:
         die(f"{what} at sector 0x{sector:x}: {FELFLASH_STATUS.get(st, st)} (status {st}); rerun")
-    say(f"  {what}: {len(data)} bytes written and verified at sector 0x{sector:x} in {ms} ms")
+    took = f" in {ms} ms" if ms is not None else ""
+    say(f"  {what}: {len(data)} bytes written and verified at sector 0x{sector:x}{took}")
 
 
 def wait_console(node=None, timeout=90):
@@ -193,8 +198,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("op", choices=["flash", "run", "fel", "reset"])
     ap.add_argument("image", nargs="?", help="fw.uimg (flash) or fw.bin (run)")
-    ap.add_argument("--boot0", nargs="?", const="", help="flash: also write boot0 to sector 16 (file next to the image if no path)")
-    ap.add_argument("--boot0-bin", help="boot0 image for the FEL DRAM init (default: boot0.bin next to the image)")
+    ap.add_argument("--boot0", action="store_true", help="flash: also write boot0 (--boot0-bin) to sector 16")
+    ap.add_argument("--boot0-bin", help="boot0 image for the FEL DRAM init and --boot0 (default: boot0.bin next to the image)")
     ap.add_argument("--felflash", help="felflash image (default: felflash.bin next to the image)")
     ap.add_argument("--console", help=f"console node for the fel request and the check (default: first {CONSOLE_GLOB})")
     a = ap.parse_args()
@@ -234,11 +239,9 @@ def main():
             die(f"{felflash}: not found (make felflash)")
         fel_write(FELFLASH_ADDR, felflash.read_bytes(), felflash.name)
         flash_region(FW_SECTOR, data, img.name)
-        if a.boot0 is not None:
-            b = pathlib.Path(a.boot0) if a.boot0 else boot0
-            if b.read_bytes()[4:12] != b"eGON.BT0":
-                die(f"{b}: not an eGON.BT0 image")
-            flash_region(BOOT0_SECTOR, b.read_bytes(), b.name)   # last: a torn boot0 is rejected by the BROM
+        if a.boot0:
+            # dram_up checked it is an eGON image; last: a torn boot0 is rejected by the BROM
+            flash_region(BOOT0_SECTOR, boot0.read_bytes(), boot0.name)
         fel_reset()
     report(a.console)
 
