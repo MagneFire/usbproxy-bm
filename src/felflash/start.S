@@ -22,10 +22,3 @@ _start:
         mov     sp, r4
         pop     {r4-r11, lr}
         bx      lr
-
-        .global irq_enable
-irq_enable:
-        bx      lr
-        .global irq_disable
-irq_disable:
-        bx      lr

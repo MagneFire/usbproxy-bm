@@ -11,7 +11,6 @@
 #define CCU_CPU_AXI_CFG     (H3_CCU + 0x050)
 #define CCU_AHB1_APB1_DIV   (H3_CCU + 0x054)
 #define CCU_APB2_DIV        (H3_CCU + 0x058)
-#define CCU_MBUS0_CLK       (H3_CCU + 0x15c)
 
 #define CPU_CLK_HZ          1008000000u     /* the SPL's default; 816 is the next knob */
 

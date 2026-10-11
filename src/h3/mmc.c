@@ -47,9 +47,6 @@
 #ifndef MMC_WIDTH
 #define MMC_WIDTH       4
 #endif
-#define CCU_SD0_CLK     (H3_CCU + 0x088)
-#define CCU_BUS_GATE0   (H3_CCU + 0x060)
-#define CCU_BUS_RST0    (H3_CCU + 0x2c0)
 
 /* response kinds */
 #define RSP_NONE  0
@@ -63,7 +60,6 @@
 static bool high_capacity;
 static uint32_t rca;
 
-int snprintf(char *buf, size_t n, const char *fmt, ...);
 static void dump(const char *tag)
 {
 	char b[160];

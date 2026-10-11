@@ -65,12 +65,9 @@
 
 /* CCU */
 #define CCU_PLL5_CFG    (H3_CCU + 0x020)
-#define CCU_AHB_GATE0   (H3_CCU + 0x060)
 #define CCU_DRAM_CLK    (H3_CCU + 0x0f4)
 #define CCU_MBUS_RESET  (H3_CCU + 0x0fc)
-#define CCU_MBUS0_CLK   (H3_CCU + 0x15c)
 #define CCU_PLL5_TUNING (H3_CCU + 0x260)
-#define CCU_AHB_RESET0  (H3_CCU + 0x2c0)
 #define AHB_MCTL        BIT(14)
 
 #define MCTL_CR_BL8         (0x4u << 20)
@@ -232,8 +229,8 @@ static bool sys_init(void)
 {
 	clrbits(CCU_MBUS0_CLK, 1u << 31);
 	clrbits(CCU_MBUS_RESET, 1u << 31);
-	clrbits(CCU_AHB_GATE0, AHB_MCTL);
-	clrbits(CCU_AHB_RESET0, AHB_MCTL);
+	clrbits(CCU_BUS_GATE0, AHB_MCTL);
+	clrbits(CCU_BUS_RST0, AHB_MCTL);
 	clrbits(CCU_PLL5_CFG, 1u << 31);
 	udelay(10);
 	clrbits(CCU_DRAM_CLK, 1u << 31);
@@ -243,8 +240,8 @@ static bool sys_init(void)
 	clrsetbits(CCU_DRAM_CLK, 0xfu | (0x3u << 20), 0u | (0u << 20) | (1u << 16));   /* DIV 1, PLL5, UPD */
 	if (!await(CCU_DRAM_CLK, 1u << 16, 0)) return false;
 
-	setbits(CCU_AHB_RESET0, AHB_MCTL);
-	setbits(CCU_AHB_GATE0, AHB_MCTL);
+	setbits(CCU_BUS_RST0, AHB_MCTL);
+	setbits(CCU_BUS_GATE0, AHB_MCTL);
 	setbits(CCU_MBUS_RESET, 1u << 31);
 	setbits(CCU_MBUS0_CLK, 1u << 31);
 	setbits(CCU_DRAM_CLK, 1u << 31);

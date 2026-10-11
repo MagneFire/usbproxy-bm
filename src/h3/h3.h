@@ -7,23 +7,20 @@
 #include <stdbool.h>
 
 #define REG32(a)        (*(volatile uint32_t *)(uintptr_t)(a))
-#define REG16(a)        (*(volatile uint16_t *)(uintptr_t)(a))
-#define REG8(a)         (*(volatile uint8_t *)(uintptr_t)(a))
 static inline uint32_t readl(uintptr_t a) { return REG32(a); }
 static inline void writel(uint32_t v, uintptr_t a) { REG32(a) = v; }
 static inline void setbits(uintptr_t a, uint32_t m) { REG32(a) |= m; }
 static inline void clrbits(uintptr_t a, uint32_t m) { REG32(a) &= ~m; }
 #define BIT(n)          (1u << (n))
 
-#define H3_SRAM_A1      0x00000000u     /* 64 KiB; BROM loads <=32 KiB here */
-#define H3_SRAM_C       0x00010000u     /* 44 KiB, contiguous with A1 */
-#define H3_SRAM_A2      0x00044000u     /* 32 KiB */
 #define H3_DRAM         0x40000000u
 
 #define H3_CCU          0x01c20000u
 #define CCU_BUS_GATE0   (H3_CCU + 0x060) /* otg 23, ehci0 24, ehci1 25, ohci0 28, ohci1 29 */
 #define CCU_BUS_GATE3   (H3_CCU + 0x06c) /* uart0 16 */
+#define CCU_SD0_CLK     (H3_CCU + 0x088)
 #define CCU_USBPHY_CFG  (H3_CCU + 0x0cc) /* phy rst 0..3, phy clk 8..11, ohci 12M 16..19 */
+#define CCU_MBUS0_CLK   (H3_CCU + 0x15c)
 #define CCU_BUS_RST0    (H3_CCU + 0x2c0) /* same bit numbers as GATE0 */
 #define CCU_BUS_RST4    (H3_CCU + 0x2d8) /* uart0 16 */
 
@@ -34,10 +31,7 @@ static inline void clrbits(uintptr_t a, uint32_t m) { REG32(a) &= ~m; }
 #define PIO_PORT(p)     (H3_PIO + 0x24 * (p))
 
 #define H3_UART0        0x01c28000u
-#define H3_TIMER        0x01c20c00u
 #define H3_WDT          0x01c20ca0u
-#define WDT_IRQ_EN      (H3_WDT + 0x00)
-#define WDT_IRQ_STA     (H3_WDT + 0x04)
 #define WDT_CTRL        (H3_WDT + 0x10)
 #define WDT_CFG         (H3_WDT + 0x14)
 #define WDT_MODE        (H3_WDT + 0x18)
@@ -55,23 +49,17 @@ static inline void clrbits(uintptr_t a, uint32_t m) { REG32(a) &= ~m; }
 #define IRQ_PPI_TIMER_S 29              /* secure physical timer (we run secure) */
 #define IRQ_MUSB        (32 + 71)       /* 103 */
 #define IRQ_EHCI1       (32 + 74)       /* 106 */
-#define IRQ_OHCI1       (32 + 75)       /* 107 */
 
 #define H3_MUSB         0x01c19000u
 #define H3_USBPHY       0x01c19400u     /* ISCR +0, PHYCTL +0x10, OTGCTL +0x20 */
 #define H3_EHCI1        0x01c1b000u
-#define H3_OHCI1        0x01c1b400u
-#define H3_HCI1_PMU     0x01c1b800u     /* ICR +0 (0x701), PHY_CTL +0x10 (SIDDQ bit 1) */
 
 #define CNT_HZ          24000000u
 
 /* start.S */
 void irq_enable(void);
 void irq_disable(void);
-uint32_t irq_save(void);
-void irq_restore(uint32_t);
 void dcache_clean_invalidate_all(void);
-void dcache_invalidate_all(void);
 
 static inline void dsb(void) { __asm__ volatile("dsb" ::: "memory"); }
 static inline void isb(void) { __asm__ volatile("isb" ::: "memory"); }
@@ -89,19 +77,14 @@ void gic_init(void);
 void gic_enable(unsigned id, void (*fn)(void));
 void gic_disable(unsigned id);
 void gic_set_handler(unsigned id, void (*fn)(void));
-void dcache_clean_range(const void *addr, uint32_t size);
-void dcache_invalidate_range(const void *addr, uint32_t size);
-void dcache_clean_invalidate_range(const void *addr, uint32_t size);
 void gic_mask(unsigned id);
 void gic_unmask(unsigned id);
 void irq_handler(void);
 
 void timer_init(void);
-uint64_t cnt_now(void);         /* CNTPCT, 24 MHz since power-on */
 uint32_t time_ms(void);
 uint32_t time_us(void);
 uint32_t tick_count(void);
-extern void (*tick_hook)(uint32_t ticks);   /* called from the tick IRQ */
 void delay_us(uint32_t us);
 void delay_ms(uint32_t ms);
 
@@ -114,6 +97,9 @@ uint32_t rtc_gp_read(unsigned n);
 void rtc_gp_write(unsigned n, uint32_t v);
 
 void mmu_init(void);
+void dcache_clean_range(const void *addr, uint32_t size);
+void dcache_invalidate_range(const void *addr, uint32_t size);
+void dcache_clean_invalidate_range(const void *addr, uint32_t size);
 
 void led_init(void);
 void led_green(int on);

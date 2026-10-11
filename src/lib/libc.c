@@ -43,14 +43,6 @@ int strcmp(const char *a, const char *b)
 	while (*a && *a == *b) a++, b++;
 	return (uint8_t)*a - (uint8_t)*b;
 }
-int strncmp(const char *a, const char *b, size_t n)
-{
-	for (; n; n--, a++, b++) {
-		if (*a != *b) return (uint8_t)*a - (uint8_t)*b;
-		if (!*a) return 0;
-	}
-	return 0;
-}
 char *strchr(const char *s, int c)
 {
 	for (; *s; s++) if (*s == (char)c) return (char *)s;

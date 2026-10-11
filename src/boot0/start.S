@@ -124,10 +124,6 @@ boot0_jump:
         mov     r2, #0
         bx      r4
 
-        .global irq_enable
-irq_enable:
-        cpsie   i
-        bx      lr
         .global irq_disable
 irq_disable:
         cpsid   i

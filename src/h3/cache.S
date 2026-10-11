@@ -4,7 +4,9 @@
         .arm
         .text
 
-        .macro  dcache_all op
+        .global dcache_clean_invalidate_all
+dcache_clean_invalidate_all:
+        push    {r4-r11, lr}
         dmb
         mrc     p15, 1, r0, c0, c0, 1           /* CLIDR */
         ands    r3, r0, #0x7000000
@@ -29,11 +31,7 @@
 2:      mov     r9, r4
 3:      orr     r11, r10, r9, lsl r5
         orr     r11, r11, r7, lsl r2
-        .ifc \op, clean_inv
         mcr     p15, 0, r11, c7, c14, 2         /* DCCISW */
-        .else
-        mcr     p15, 0, r11, c7, c6, 2          /* DCISW */
-        .endif
         subs    r9, r9, #1
         bge     3b
         subs    r7, r7, #1
@@ -45,16 +43,4 @@
         mcr     p15, 2, r10, c0, c0, 0
         dsb
         isb
-        .endm
-
-        .global dcache_clean_invalidate_all
-dcache_clean_invalidate_all:
-        push    {r4-r11, lr}
-        dcache_all clean_inv
-        pop     {r4-r11, pc}
-
-        .global dcache_invalidate_all
-dcache_invalidate_all:
-        push    {r4-r11, lr}
-        dcache_all inv
         pop     {r4-r11, pc}

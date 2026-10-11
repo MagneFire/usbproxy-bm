@@ -15,7 +15,6 @@
 #include <stdarg.h>
 #include <string.h>
 
-#define GP1_DEATH_TAG   0xB0070000u
 #define GP1_DEATH_MASK  0xFFFFFF00u
 #define MAX_DEATHS      3
 #define WHY_BAD_IMAGE   1
@@ -61,7 +60,7 @@ static void __attribute__((noreturn)) boot_card(void)
 {
 	uint32_t t0 = time_ms();
 	uint32_t g1 = rtc_gp_read(1);
-	unsigned deaths = (g1 & GP1_DEATH_MASK) == GP1_DEATH_TAG ? (g1 & 0xff) + 1 : 0;
+	unsigned deaths = (g1 & GP1_DEATH_MASK) == RTC_MAGIC_DEATH ? (g1 & 0xff) + 1 : 0;
 
 	wdt_arm();
 	rtc_gp_write(2, 0xB0000000u | (t0 & 0xffffffu));
@@ -73,7 +72,7 @@ static void __attribute__((noreturn)) boot_card(void)
 		outf("boot0: %u firmware boots died in a row\n", deaths);
 		enter_fel(WHY_DEATHS);
 	}
-	rtc_gp_write(1, GP1_DEATH_TAG | deaths);
+	rtc_gp_write(1, RTC_MAGIC_DEATH | deaths);
 
 	unsigned long size = dram_init();
 	outf("boot0: DRAM %lu MiB in %lu ms\n", size >> 20, (unsigned long)(time_ms() - t0));
@@ -113,8 +112,8 @@ static void __attribute__((noreturn)) boot_card(void)
 	outf("boot0: %s, %lu bytes, crc ok, read %lu ms; jump at %lu ms\n",
 	     name, (unsigned long)fsize, (unsigned long)(t2 - t1), (unsigned long)t2);
 	uart_flush();
-	writel(0, H3_CCU + 0x088);                  /* SD clock off, the firmware never reads the card */
-	clrbits(H3_CCU + 0x060, BIT(8));
+	writel(0, CCU_SD0_CLK);                     /* SD clock off, the firmware never reads the card */
+	clrbits(CCU_BUS_GATE0, BIT(8));
 	rtc_gp_write(3, t2 & 0xffffffu);
 	wdt_feed();
 	__asm__ volatile("mcr p15, 0, %0, c14, c0, 0" :: "r"(CNT_HZ));    /* CNTFRQ, as the SPL did */
