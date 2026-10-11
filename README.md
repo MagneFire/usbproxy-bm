@@ -24,8 +24,8 @@ Override the toolchain prefix with `CROSS=`.
 
 | sector | content |
 |---|---|
-| 16 (8 KiB) | `boot0.bin`, eGON image the BROM loads (tools/egon.py adds the checksum) |
-| 0x18800 (49 MiB) | `fw.uimg` |
+| 0x00010 | `boot0.bin`, eGON image the BROM loads (tools/egon.py adds the checksum) |
+| 0x18800 | `fw.uimg` |
 
 Nothing else on the card is read.
 
