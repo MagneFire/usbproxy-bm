@@ -709,6 +709,15 @@ void bridge_gadget_in_done(int sl)
 	w2h_fill(s);
 }
 
+/* A drain the stack refused on the halted endpoint went back to FULL with
+ * no completion to retry it: the host's CLEAR_FEATURE is that event. */
+void bridge_gadget_in_cleared(int sl)
+{
+	struct slot *s = &slots[sl & 1];
+	w2h_drain(s);
+	w2h_drain_partial(s);
+}
+
 /* Main loop: forward what has landed so far (both directions, adb slot). */
 bool bridge_adb_pulsing(void) { return fr.pulsing; }
 

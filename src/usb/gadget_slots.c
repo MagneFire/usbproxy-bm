@@ -66,7 +66,11 @@ static bool slots_control(uint8_t rhport, uint8_t stage, tusb_control_request_t 
 		if (ep == slots[0].ep_in && bridge_adb_pulsing()) {
 			usbd_edpt_stall(rhport, ep);
 			log_printf("slots: host cleared halt on EP%02x mid-pulse; re-stalled\n", ep);
+			return true;
 		}
+		for (int i = 0; i < SLOT_COUNT; i++)
+			if (slots[i].st.open && ep == slots[i].ep_in)
+				bridge_gadget_in_cleared(i);
 		return true;	/* usbd ACKs standard endpoint requests itself */
 	}
 	return false;		/* no class requests on the bridge interfaces */
