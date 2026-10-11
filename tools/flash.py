@@ -157,11 +157,13 @@ def flash_region(sector, data, what):
     say(f"  {what}: {len(data)} bytes written and verified at sector 0x{sector:x} in {ms} ms")
 
 
-def wait_console(timeout=90):
+def wait_console(node=None, timeout=90):
+    """The console node the firmware brings back after the reset: the one asked
+    for (it went away with the FEL entry too), or the first that appears."""
     end = time.time() + timeout
     while time.time() < end:
-        nodes = console_nodes()
-        if nodes:
+        nodes = [node] if node else console_nodes()
+        if nodes and os.path.exists(nodes[0]):
             time.sleep(1.5)
             return nodes[0]
         time.sleep(0.5)
@@ -169,9 +171,9 @@ def wait_console(timeout=90):
 
 
 def report(console):
-    node = console or wait_console()
+    node = wait_console(console)
     if not node:
-        die("no console within 90 s after the reset")
+        die(f"no console {console or CONSOLE_GLOB} within 90 s after the reset")
     out = console_cmd(node, "status", 1.5)
     build = [l for l in out.splitlines() if l.startswith("build=")]
     say(f"console {node}: {build[0] if build else 'no build line in status'}")
