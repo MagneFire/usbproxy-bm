@@ -58,6 +58,14 @@ static struct con con_cdc = { "cdc", cdc_puts, {0}, 0, false, 0 };
 static struct con *cur = &con_uart;
 
 static void con_out(const char *s) { cur->puts(s); }
+/* Long output (`log`, `mem`) runs inside one main-loop pass and can take
+ * longer than the watchdog's period: feed it per piece, unless the
+ * progress gate is letting it fire. */
+static void dump_out(const char *s)
+{
+	con_out(s);
+	if (!g_wdt_withheld) wdt_feed();
+}
 static void prompt(void) { con_out("bm> "); }
 
 static int argsplit(char *s, char **argv, int max)
@@ -163,7 +171,7 @@ static void run(char *s)
 			con_out("following the log; any key stops\n");
 		}
 	} else if (!strcmp(c, "log")) {
-		log_dump(argc > 1 ? strtoul(argv[1], 0, 0) : 4096, con_out);
+		log_dump(argc > 1 ? strtoul(argv[1], 0, 0) : 4096, dump_out);
 	} else if (!strcmp(c, "reboot")) {
 		log_printf("reboot requested\n");
 		wdt_reset_now();
@@ -199,7 +207,7 @@ static void run(char *s)
 		for (unsigned i = 0; i < n; i++) {
 			snprintf(buf, sizeof buf, "%08lx: %08lx\n", (unsigned long)(a + 4 * i),
 				 (unsigned long)readl(a + 4 * i));
-			con_out(buf);
+			dump_out(buf);
 		}
 	} else if (!strcmp(c, "memw") && argc > 2) {
 		uint32_t a = strtoul(argv[1], 0, 16) & ~3u;

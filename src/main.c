@@ -15,6 +15,7 @@ int g_up;
  * record. Console `hangusb` halts the EHCI to prove it. */
 #define USBC_FRNUM      (0x01c19000u + 0x54)
 #define EHCI1_FRINDEX   (0x01c1b010u + 0x0c)
+bool g_wdt_withheld;		/* the gate stopped feeding: nothing else may */
 static bool usb_progress_ok(void)
 {
 	static uint32_t last_check, last_frnum, last_frindex, stuck_since;
@@ -44,6 +45,7 @@ static bool usb_progress_ok(void)
 	if (!stuck_since) stuck_since = now;
 	if ((int32_t)(now - stuck_since) < 2000) return true;
 	lost = true;
+	g_wdt_withheld = true;
 	log_printf("watchdog: usb progress lost (musb %s, ehci %s); letting the watchdog fire\n",
 		   musb_ok ? "ok" : "stuck", ehci_ok ? "ok" : "stuck");
 	log_set_fault(musb_ok ? "ehci frame counter stuck" : "musb frame counter stuck");
