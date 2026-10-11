@@ -1181,10 +1181,11 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
     USBC_REG_clear_bit_b(USBC_BP_POWER_D_HIGH_SPEED_EN, USBC_REG_PCTL(USBC0_BASE));
   #endif
 
+  /* No SOF interrupt: at high speed it is 8000 wakeups/s for nothing (the
+   * progress gate reads FRNUM itself); console `sofirq 1` turns it on. */
   USBC_Writeb((1 << USBC_BP_INTUSBE_EN_SUSPEND)
     | (1 << USBC_BP_INTUSBE_EN_RESUME)
     | (1 << USBC_BP_INTUSBE_EN_RESET)
-    | (1 << USBC_BP_INTUSBE_EN_SOF)
     | (1 << USBC_BP_INTUSBE_EN_DISCONNECT)
     , USBC_REG_INTUSBE(USBC0_BASE));
   gic_set_handler(IRQ_MUSB, usb_isr_handler);
@@ -1565,3 +1566,9 @@ void dcd_int_handler(uint8_t rhport)
   }
 }
 #endif
+
+void dcd_h3_sof_irq(bool on)
+{
+  if (on) USBC_REG_set_bit_b(USBC_BP_INTUSBE_EN_SOF, USBC_REG_INTUSBE(USBC0_BASE));
+  else    USBC_REG_clear_bit_b(USBC_BP_INTUSBE_EN_SOF, USBC_REG_INTUSBE(USBC0_BASE));
+}

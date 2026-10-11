@@ -103,6 +103,8 @@ static void __attribute__((noreturn)) boot_card(void)
 	outf("boot0: %s, %lu bytes, crc ok, read %lu ms; jump at %lu ms\n",
 	     name, (unsigned long)fsize, (unsigned long)(t2 - t1), (unsigned long)t2);
 	uart_flush();
+	writel(0, H3_CCU + 0x088);                  /* SD clock off, the firmware never reads the card */
+	clrbits(H3_CCU + 0x060, BIT(8));
 	rtc_gp_write(3, t2 & 0xffffffu);
 	wdt_feed();
 	__asm__ volatile("mcr p15, 0, %0, c14, c0, 0" :: "r"(CNT_HZ));    /* CNTFRQ, as the SPL did */

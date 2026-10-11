@@ -4,6 +4,7 @@
 #ifndef H3_H
 #define H3_H
 #include <stdint.h>
+#include <stdbool.h>
 
 #define REG32(a)        (*(volatile uint32_t *)(uintptr_t)(a))
 #define REG16(a)        (*(volatile uint16_t *)(uintptr_t)(a))
@@ -119,6 +120,11 @@ void led_green(int on);
 void led_red(int on);
 
 void ccu_uart0_enable(void);
+void ccu_set_cpu_mhz(unsigned mhz);
+unsigned ccu_cpu_mhz(void);
+void ccu_set_bus_idle(bool idle);
+#define CPU_MHZ_ACTIVE 1008
+#define CPU_MHZ_IDLE   648
 
 void exception_handler(uint32_t type, uint32_t *frame) __attribute__((noreturn));
 #endif

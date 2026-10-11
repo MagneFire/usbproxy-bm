@@ -61,6 +61,9 @@ void usbphy0_init(void)
 	clrbits(PMU0_BASE + PMU_PHYCTL, SIDDQ);
 	setbits(PHY_OTGCTL, BIT(0));            /* route PHY0 to musb (phy0_dual_route) */
 	phy_tune(0);
+	/* PHY0's host side is never used: gates off again (verified: the gadget
+	 * enumerates and runs with them off, 2026-10-11). */
+	clrbits(CCU_BUS_GATE0, BIT(24) | BIT(28));
 }
 
 void usbphy1_init(void)
@@ -77,4 +80,17 @@ void usbphy1_init(void)
 	clrbits(PMU1_BASE + PMU_PHYCTL, SIDDQ);
 	writel(0x701, PMU1_BASE + PMU_ICR);          /* INCR8/INCR4/INCRX align + ULPI bypass */
 	phy_tune(1);
+}
+
+/* Power measurement: stop EHCI1, gate EHCI1/OHCI1 and PHY1, SIDDQ on. Only
+ * meaningful with nothing bound (the progress gate would otherwise reset the
+ * board); a reboot brings the host side back. */
+void usbphy1_off(void)
+{
+	clrbits(H3_EHCI1 + 0x10, BIT(0));            /* USBCMD.RS */
+	delay_ms(2);
+	setbits(PMU1_BASE + PMU_PHYCTL, SIDDQ);
+	clrbits(CCU_BUS_GATE0, BIT(25) | BIT(29));
+	clrbits(CCU_BUS_RST0, BIT(25) | BIT(29));
+	clrbits(CCU_USBPHY_CFG, BIT(1) | BIT(9) | BIT(17));
 }

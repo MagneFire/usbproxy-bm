@@ -80,6 +80,10 @@ static void cmd_status(void)
 		GITREV, gadget_serial(), (unsigned long)time_ms(), (unsigned long)g_entry_ms,
 		(unsigned long)tick_count(), (unsigned long)log_boots(), g_up);
 	con_out(buf);
+	extern uint32_t g_loops_ps, g_wfis_ps, g_busy_us_ps;
+	snprintf(buf, sizeof buf, "idle=loops:%lu wfis:%lu busy_us:%lu (per s)\n",
+		 (unsigned long)g_loops_ps, (unsigned long)g_wfis_ps, (unsigned long)g_busy_us_ps);
+	con_out(buf);
 	snprintf(buf, sizeof buf, "gp0=%08lx\ngp1=%08lx\ngp2=%08lx\ngp3=%08lx\nwdt=%d\n",
 		(unsigned long)rtc_gp_read(0), (unsigned long)rtc_gp_read(1),
 		(unsigned long)rtc_gp_read(2), (unsigned long)rtc_gp_read(3), wdt_armed());
@@ -147,7 +151,7 @@ static void run(char *s)
 	char buf[48];
 	if (!strcmp(c, "help")) {
 		con_out("status log [bytes] reboot uboot hang hangnext panic mem <addr> [words] "
-			"fel reboot log [bytes|-f] mem <hex> [n] memw <hex> <hex> gp <n> [val] led <g|r> <0|1> detach attach hostxfer <in|out> <n> [slot]\n");
+			"fel reboot log [bytes|-f] mem <hex> [n] memw <hex> <hex> gp <n> [val] led <g|r> <0|1> detach attach hostxfer <in|out> <n> [slot] sofirq <0|1> cpuclk [MHz] powerauto [0|1] hostoff\n");
 	} else if (!strcmp(c, "status")) {
 		cmd_status();
 	} else if (!strcmp(c, "log") && argc > 1 && !strcmp(argv[1], "-f")) {
@@ -249,6 +253,23 @@ static void run(char *s)
 		if (argc > 1) bridge_set_cut(strtoul(argv[1], 0, 0));
 		snprintf(buf, sizeof buf, "cut=%lu\n", (unsigned long)bridge_cut());
 		con_out(buf);
+	} else if (!strcmp(c, "sofirq") && argc > 1) {
+		extern void dcd_h3_sof_irq(bool);
+		dcd_h3_sof_irq(strtoul(argv[1], 0, 0) != 0);
+	} else if (!strcmp(c, "cpuclk")) {
+		extern void ccu_set_cpu_mhz(unsigned); extern unsigned ccu_cpu_mhz(void);
+		if (argc > 1) ccu_set_cpu_mhz((unsigned)strtoul(argv[1], 0, 0));
+		snprintf(buf, sizeof buf, "cpu=%u MHz\n", ccu_cpu_mhz());
+		con_out(buf);
+	} else if (!strcmp(c, "powerauto")) {
+		extern bool g_power_auto;
+		if (argc > 1) g_power_auto = strtoul(argv[1], 0, 0) != 0;
+		snprintf(buf, sizeof buf, "powerauto=%d\n", g_power_auto);
+		con_out(buf);
+	} else if (!strcmp(c, "hostoff")) {
+		extern void usbphy1_off(void);
+		log_printf("hostoff: EHCI1/OHCI1/PHY1 off until the next reboot (power measurement)\n");
+		usbphy1_off();
 	} else if (!strcmp(c, "detach")) {
 		g_manual_detach = true;
 		tud_disconnect();

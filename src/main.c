@@ -59,6 +59,10 @@ static bool usb_progress_ok(void)
  * finishes in ~0.3 s. The console's `detach` suspends this. */
 bool g_manual_detach;
 uint32_t g_represents;
+/* Idle accounting for `status`: main-loop passes and WFIs in the last whole
+ * second (idle = most passes end in a WFI; the 1 ms tick alone gives ~1000). */
+uint32_t g_loops_ps, g_wfis_ps, g_busy_us_ps;
+static uint32_t loops, wfis, busy_us, rate_t0;
 static void gadget_present_check(void)
 {
 	static uint32_t since, dropped_at;
@@ -78,6 +82,21 @@ static void gadget_present_check(void)
 		tud_disconnect();
 		dropped = true; dropped_at = now;
 	}
+}
+
+/* Power state follows the bridge: full clocks while a device is bound (the
+ * datapath is CPU-bound PIO), idle clocks otherwise. Console `cpuclk`
+ * overrides until the next transition; `powerauto 0` stops the following. */
+bool g_power_auto = true;
+static void power_follow(void)
+{
+	static int state = -1;
+	int active = host_daddr() != 0;
+	if (!g_power_auto || active == state) return;
+	state = active;
+	ccu_set_cpu_mhz(active ? CPU_MHZ_ACTIVE : CPU_MHZ_IDLE);
+	ccu_set_bus_idle(!active);
+	log_printf("power: %s (cpu %u MHz)\n", active ? "active" : "idle", ccu_cpu_mhz());
 }
 
 int main(void)
@@ -130,6 +149,7 @@ int main(void)
 		if (usb_progress_ok())
 			wdt_feed();
 		gadget_present_check();
+		power_follow();
 		/* Sleep only when nothing is queued, decided with IRQs masked so an
 		 * event raised between the check and the wfi still wakes us (WFI
 		 * wakes on a pending IRQ regardless of CPSR.I). An unconditional
@@ -138,9 +158,20 @@ int main(void)
 		extern void hcd_h3_poll(void);
 		hcd_h3_poll();
 		bridge_poll();
+		loops++;
 		__asm__ volatile("cpsid i" ::: "memory");
-		if (!tud_task_event_ready() && !tuh_task_event_ready() && !bridge_host_pending())
+		if (!tud_task_event_ready() && !tuh_task_event_ready() && !bridge_host_pending()) {
+			uint32_t t_sleep = time_us();
 			wfi();
+			busy_us -= time_us() - t_sleep;   /* sleeping time is not busy time */
+			wfis++;
+		}
 		__asm__ volatile("cpsie i" ::: "memory");
+		uint32_t now = time_ms();
+		if (now - rate_t0 >= 1000) {
+			g_loops_ps = loops; g_wfis_ps = wfis;
+			g_busy_us_ps = busy_us + (now - rate_t0) * 1000;
+			loops = wfis = 0; busy_us = 0; rate_t0 = now;
+		}
 	}
 }
