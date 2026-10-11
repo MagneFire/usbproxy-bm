@@ -39,15 +39,14 @@ bool dcd_dcache_invalidate(const void *addr, uint32_t size)
 
 void tud_mount_cb(void)
 {
+	const char *speed = tud_speed_get() == TUSB_SPEED_HIGH ? "high speed" : "full speed";
 	/* "Up" for boot0's death counter: the host configured the gadget. */
 	if (!g_up) {
 		rtc_gp_write(1, 0);
 		g_up = 1;
-		log_printf("usb: configured by the host (%s); GP1 cleared\n",
-			   tud_speed_get() == TUSB_SPEED_HIGH ? "high speed" : "full speed");
+		log_printf("usb: configured by the host (%s); GP1 cleared\n", speed);
 	} else {
-		log_printf("usb: configured again (%s)\n",
-			   tud_speed_get() == TUSB_SPEED_HIGH ? "high speed" : "full speed");
+		log_printf("usb: configured again (%s)\n", speed);
 	}
 }
 

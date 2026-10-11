@@ -8,8 +8,6 @@
 #define CFG_TUSB_DEBUG          0
 
 #define TUP_DCD_ENDPOINT_MAX    5       /* ep0 + 4 (H3 musb) */
-#define TUP_RHPORT_HIGHSPEED    1
-#define TUP_MCU_STRICT_ALIGN    0
 
 /* Device (musb on the OTG port, to the Mac) */
 #define CFG_TUD_ENABLED         1

@@ -139,7 +139,6 @@ void tuh_umount_cb(uint8_t daddr)
 }
 
 /* ---- port policy ------------------------------------------------------ */
-uint32_t hcd_h3_isr_count(void);
 static uint32_t last_beat;
 static volatile bool port_connected_once;
 

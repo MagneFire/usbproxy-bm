@@ -14,6 +14,9 @@
 #define EHCI_OP         (H3_EHCI1 + 0x10)
 #define EHCI_USBCMD     (EHCI_OP + 0x00)
 #define EHCI_USBSTS     (EHCI_OP + 0x04)
+#define EHCI_USBINTR    (EHCI_OP + 0x08)
+#define EHCI_FRINDEX    (EHCI_OP + 0x0c)
+#define EHCI_ASYNCLIST  (EHCI_OP + 0x18)
 #define EHCI_CONFIGFLAG (EHCI_OP + 0x40)
 #define EHCI_PORTSC     (EHCI_OP + 0x44)
 
@@ -50,7 +53,6 @@ static void ehci_irq(void)
 	isr_count++;
 	hcd_int_handler(1, true);
 }
-uint32_t hcd_h3_isr_count(void) { return isr_count; }
 
 void hcd_h3_poll(void)
 {
@@ -95,12 +97,6 @@ bool hcd_deinit(uint8_t rhport)
 	return ehci_deinit(rhport);
 }
 
-bool hcd_configure(uint8_t rhport, uint32_t cfg_id, const void *cfg_param)
-{
-	(void)rhport; (void)cfg_id; (void)cfg_param;
-	return false;
-}
-
 void hcd_int_enable(uint8_t rhport) { (void)rhport; gic_unmask(IRQ_EHCI1); }
 void hcd_int_disable(uint8_t rhport) { (void)rhport; gic_mask(IRQ_EHCI1); }
 
@@ -108,13 +104,12 @@ void hcd_int_disable(uint8_t rhport) { (void)rhport; gic_mask(IRQ_EHCI1); }
 void hcd_h3_dump(void (*out)(const char *))
 {
 	char b[160];
-	uint32_t base = EHCI_OP;
 	snprintf(b, sizeof b, "cmd=%08lx sts=%08lx intr=%08lx frindex=%08lx async=%08lx portsc=%08lx irqs=%lu\n",
-		 (unsigned long)readl(base + 0), (unsigned long)readl(base + 4), (unsigned long)readl(base + 8),
-		 (unsigned long)readl(base + 0xc), (unsigned long)readl(base + 0x18),
+		 (unsigned long)readl(EHCI_USBCMD), (unsigned long)readl(EHCI_USBSTS), (unsigned long)readl(EHCI_USBINTR),
+		 (unsigned long)readl(EHCI_FRINDEX), (unsigned long)readl(EHCI_ASYNCLIST),
 		 (unsigned long)readl(EHCI_PORTSC), (unsigned long)isr_count);
 	out(b);
-	uint32_t head = readl(base + 0x18) & ~0x1fu, qh = head;
+	uint32_t head = readl(EHCI_ASYNCLIST) & ~0x1fu, qh = head;
 	for (int i = 0; i < 8 && qh >= 0x40000000 && qh < 0x50000000; i++) {
 		const volatile uint32_t *q = (const volatile uint32_t *)(uintptr_t)qh;
 		uint32_t ep = q[1];
