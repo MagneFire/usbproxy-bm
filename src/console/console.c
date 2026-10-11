@@ -171,6 +171,13 @@ static void run(char *s)
 		 * patch 0004) into the BROM's FEL routine: sunxi-fel on the OTG
 		 * port, card untouched. `appliance.py bm flash/run` start here. */
 		log_printf("fel requested: GP1=FEL1 + reset\n");
+		if (cur == &con_cdc) {
+			/* the log goes to the UART only: answer here too (flash.py
+			 * waits longer for a board that did), and let it out */
+			con_out("fel requested\n");
+			for (uint32_t t0 = time_ms(); time_ms() - t0 < 20;)
+				tud_task();
+		}
 		rtc_gp_write(1, RTC_MAGIC_FEL1);
 		wdt_reset_now();
 	} else if (!strcmp(c, "hang")) {
