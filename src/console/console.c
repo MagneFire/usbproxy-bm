@@ -1,7 +1,6 @@
 /* Line console on the UART and on the gadget's CDC-ACM port, same command
  * set, same parser (one line buffer per port). Not a shell: a fixed command
- * set appliance.py's `bm` transport can parse. `status` prints key=value
- * lines. */
+ * set tools can parse. `status` prints key=value lines. */
 #include <string.h>
 #include "fw.h"
 #include "gitrev.h"            /* generated: build/gitrev.h */

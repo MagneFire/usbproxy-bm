@@ -1,6 +1,6 @@
 /* H3 USB PHYs. PHY0 sits between the OTG connector and either musb or
  * EHCI0/OHCI0 (OTGCTL routes it; we want musb). PHY1 feeds EHCI1/OHCI1, the
- * USB-A port the watch cradle is on. Register facts: BARE-METAL.md section 3.
+ * USB-A port the watch cradle is on.
  * Sequence per PHY mirrors the kernel: bus reset/gate for the controller,
  * PHY reset deassert + clock, SIDDQ clear in the HCI PMU block, then the
  * PHYCTL bit-bang tuning (45 ohm cal on PHY0, TX amplitude 0x14, disconnect
@@ -61,8 +61,7 @@ void usbphy0_init(void)
 	clrbits(PMU0_BASE + PMU_PHYCTL, SIDDQ);
 	setbits(PHY_OTGCTL, BIT(0));            /* route PHY0 to musb (phy0_dual_route) */
 	phy_tune(0);
-	/* PHY0's host side is never used: gates off again (verified: the gadget
-	 * enumerates and runs with them off, 2026-10-11). */
+	/* PHY0's host side is never used: gates off again. */
 	clrbits(CCU_BUS_GATE0, BIT(24) | BIT(28));
 }
 

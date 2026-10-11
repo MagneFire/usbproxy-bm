@@ -3,10 +3,10 @@
  * same: 1d6b:0104, class EF/02/01, one configuration with the CDC-ACM
  * console on interfaces 0/1 (ep3in notify, ep4 data), the adb bridge
  * interface 2 (ff/42/01, ep1) and the fastboot bridge interface 3
- * (ff/42/03, ep2). Endpoint numbers match the live appliance's map
- * (2026-10-09: adb 0x81/0x01, fastboot 0x82/0x02, console 0x83/0x84/0x04).
- * The serial differs from the appliance's USBPROXY01 so both can be on the
- * same Mac (GADGET_SERIAL, Makefile). */
+ * (ff/42/03, ep2). Endpoint numbers match the appliance's map: adb
+ * 0x81/0x01, fastboot 0x82/0x02, console 0x83/0x84/0x04. The serial differs
+ * from the appliance's USBPROXY01 so both can be on the same Mac
+ * (GADGET_SERIAL, Makefile). */
 #include <string.h>
 #include "fw.h"
 #include "tusb.h"

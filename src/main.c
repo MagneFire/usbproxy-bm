@@ -1,5 +1,5 @@
-/* usbproxy-bm: the superloop. M0 = runtime skeleton: UART console, watchdog,
- * RTC stamps/guards, log ring, MMU, GIC + 1 ms tick, LEDs. */
+/* usbproxy-bm: bring-up and the superloop (USB stacks, bridge, console,
+ * watchdog, power). */
 #include "fw.h"
 #include "gitrev.h"            /* generated: build/gitrev.h */
 #include "tusb.h"
@@ -33,9 +33,9 @@ static bool usb_progress_ok(void)
 	/* No SOFs from the Mac is not a fault: when the Mac sleeps the musb
 	 * reports SUSPEND and, 2 ms later, a RESUME that never brings SOFs, so
 	 * tud_suspended() is false while the bus sits idle. Resetting the board
-	 * there wakes the Mac over USB and the two then loop (observed: 57 s
-	 * period). The gadget bus state is logged on change and only the EHCI
-	 * (our own host controller) can fail the gate. */
+	 * there wakes the Mac over USB and the two then loop. The gadget bus
+	 * state is logged on change and only the EHCI (our own host controller)
+	 * can fail the gate. */
 	static bool sofs_idle;
 	if (sofs == sofs_idle) {
 		sofs_idle = !sofs;
@@ -51,13 +51,11 @@ static bool usb_progress_ok(void)
 	return false;
 }
 
-/* The Mac can miss our disconnect: after quick power cycles it kept the old
- * device object for a minute, retried transfers into the void (transaction
- * errors every second) and never reset the new us; four cold boots sat
- * unconfigured (2026-10-10 18:16). If the host has not configured us within
- * 2 s of our last connect, drop the pull-up for 100 ms and present the
- * gadget again, which the host sees as a fresh attach. Normal enumeration
- * finishes in ~0.3 s. The console's `detach` suspends this. */
+/* The Mac can miss our disconnect after a quick power cycle, keep the old
+ * device object and never reset the new one. If the host has not
+ * configured us within 2 s of our last connect, drop the pull-up for 100 ms
+ * and present the gadget again, which the host sees as a fresh attach. The
+ * console's `detach` suspends this. */
 bool g_manual_detach;
 uint32_t g_represents;
 /* A full-speed configuration is re-presented: a fresh attach gets high speed
@@ -171,9 +169,8 @@ int main(void)
 		power_follow();
 		/* Sleep only when nothing is queued, decided with IRQs masked so an
 		 * event raised between the check and the wfi still wakes us (WFI
-		 * wakes on a pending IRQ regardless of CPSR.I). An unconditional
-		 * wfi here parked every completion that arrived during the task
-		 * pass until the next interrupt, up to one SOF period (125 us). */
+		 * wakes on a pending IRQ regardless of CPSR.I). A completion queued
+		 * during the task pass is handled now, not at the next interrupt. */
 		hcd_h3_poll();
 		bridge_poll();
 		loops++;
