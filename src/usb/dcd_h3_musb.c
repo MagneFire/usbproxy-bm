@@ -836,6 +836,9 @@ static bool handle_xfer_out(uint_fast8_t ep_addr)
   // TU_LOG1(" RXCSRL%d = %x\r\n", epnum_minus1 + 1, regs->RXCSRL);
 
   TU_ASSERT(__USBC_Dev_Rx_IsReadDataReady());
+  /* Nothing armed: the packet waits in the FIFO for the next transfer. A
+   * drain loop that read a packet takes its latched interrupt here too. */
+  if (!pipe->buf) return false;
 
   const unsigned mps = USBC_Readw(USBC_REG_RXMAXP(USBC0_BASE));
   if (dma_ch[DMA_CHAN_RX].active && dma_ch[DMA_CHAN_RX].ep_addr == ep_addr) {
