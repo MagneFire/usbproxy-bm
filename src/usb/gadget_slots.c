@@ -102,15 +102,6 @@ static bool slots_xfer(uint8_t rhport, uint8_t ep_addr, xfer_result_t result, ui
 	return false;
 }
 
-void dcd_h3_out_progress(uint8_t ep_addr, uint32_t received)
-{
-	for (int i = 0; i < SLOT_COUNT; i++)
-		if (slots[i].st.open && ep_addr == slots[i].ep_out) {
-			bridge_gadget_out_progress(i, received);
-			return;
-		}
-}
-
 static const usbd_class_driver_t slots_driver = {
 	.name = "slots",
 	.init = slots_init,

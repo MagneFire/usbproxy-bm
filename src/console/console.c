@@ -110,22 +110,11 @@ static void cmd_status(void)
 		snprintf(buf, sizeof buf, "musb_dpb=rx_extra:%lu tx_busy_irqs:%lu\n",
 			 (unsigned long)x, (unsigned long)b);
 		con_out(buf);
-		uint32_t rd, rdn, wr, wrn;
-		dcd_h3_fifo_stats(&rd, &rdn, &wr, &wrn);
-		snprintf(buf, sizeof buf, "musb_fifo_us_x10=rd:%lu (n %lu) wr:%lu (n %lu)\n",
-			 (unsigned long)rd, (unsigned long)rdn, (unsigned long)wr, (unsigned long)wrn);
-		con_out(buf);
-		uint32_t *grx, *gtx;
-		dcd_h3_gap_stats(&grx, &gtx);
-		snprintf(buf, sizeof buf, "musb_gap_rx=<12:%lu <20:%lu <30:%lu <50:%lu <100:%lu more:%lu\nmusb_gap_tx=<12:%lu <20:%lu <30:%lu <50:%lu <100:%lu more:%lu\n",
-			 (unsigned long)grx[0], (unsigned long)grx[1], (unsigned long)grx[2], (unsigned long)grx[3], (unsigned long)grx[4], (unsigned long)grx[5],
-			 (unsigned long)gtx[0], (unsigned long)gtx[1], (unsigned long)gtx[2], (unsigned long)gtx[3], (unsigned long)gtx[4], (unsigned long)gtx[5]);
-		con_out(buf);
-		uint32_t drx, dtx, dsh, dsp, dbad;
-		dcd_h3_dma_stats(&drx, &dtx, &dsh, &dsp, &dbad);
-		snprintf(buf, sizeof buf, "musb_dma=mask:%lu rx:%lu tx:%lu rx_short:%lu tx_spin_us:%lu bad_resid:%lu\n",
+		uint32_t drx, dtx, dsh, dbad;
+		dcd_h3_dma_stats(&drx, &dtx, &dsh, &dbad);
+		snprintf(buf, sizeof buf, "musb_dma=mask:%lu rx:%lu tx:%lu rx_short:%lu bad_resid:%lu\n",
 			 (unsigned long)dcd_h3_dma_enabled(), (unsigned long)drx, (unsigned long)dtx, (unsigned long)dsh,
-			 (unsigned long)dsp, (unsigned long)dbad);
+			 (unsigned long)dbad);
 		con_out(buf);
 	}
 	for (int i = 0; i < SLOT_COUNT; i++) {

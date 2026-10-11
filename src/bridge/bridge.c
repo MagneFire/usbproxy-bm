@@ -28,7 +28,6 @@ struct dir {
 	bool zlp[BRIDGE_NBUF];		/* host OUT: a zero-length packet ended it, forward one after it */
 	bool resync;			/* watch IN: drop buffers until a header (gadget reconnected) */
 	uint32_t off[BRIDGE_NBUF];	/* bytes already forwarded early (cut-through) */
-	volatile uint32_t progress;	/* landed bytes of the filling buffer */
 	uint32_t fwd;			/* of those, handed on */
 	bool partial;			/* the drain in flight is a cut-through piece */
 	uint32_t partials;
@@ -351,8 +350,9 @@ static int any_empty(struct dir *d)
 /* Cut-through: while a buffer is still filling, whole packets that have
  * already landed are forwarded ahead of the fill's completion (one drain in
  * flight at a time, so the drain is of everything landed since the last
- * one). d->progress is the landed byte count of the filling buffer (musb
- * ISR for h2w, EHCI overlay for w2h); d->fwd what has been handed on.
+ * one). The landed byte count of the filling buffer comes from the musb
+ * driver for h2w and the EHCI overlay for w2h; d->fwd is what has been
+ * handed on.
  * The remainder after the fill completes (short tail, or nothing) goes
  * through the ordinary FULL->drain path from offset off[i]. Only whole
  * 512-byte packets are forwarded early so the far side never sees a short
@@ -363,7 +363,7 @@ static void dir_fill_armed(struct dir *d, int i)
 {
 	d->state[i] = B_FILLING; d->filling = i;
 	d->zlp[i] = false;
-	d->off[i] = 0; d->fwd = 0; d->progress = 0;
+	d->off[i] = 0; d->fwd = 0;
 	d->t_fill_sub = time_us();
 }
 
@@ -444,8 +444,7 @@ static void h2w_drain_partial(struct slot *s)
 	if (s == &slots[0] && (fr.payload_remaining == 0 || fr.dropping || fr.unsynced)) return;
 	if (oldest_full(d) >= 0) return;		/* order: complete buffers first */
 	bool dma;
-	d->progress = dcd_h3_out_landed(s->g_out, &dma);
-	uint32_t landed = d->progress & ~(PKT - 1);
+	uint32_t landed = dcd_h3_out_landed(s->g_out, &dma) & ~(PKT - 1);
 	if (dma) { if (landed < PKT) return; landed -= PKT; }	/* residual may run ahead of the data */
 	/* Per-packet OUT transfers made the watch slower (its OKAY ~200 us
 	 * later); hand on whole 2 KiB halves instead. The remainder goes with
@@ -458,12 +457,6 @@ static void h2w_drain_partial(struct slot *s)
 	d->partials++;
 	if (!h2w_submit(s, i, off, landed - off, true))
 		d->fwd = off;
-}
-
-void bridge_gadget_out_progress(int sl, uint32_t bytes)
-{
-	struct dir *d = &slots[sl & 1].h2w;
-	if (d->filling >= 0 && bytes > d->progress) d->progress = bytes;
 }
 
 void bridge_gadget_out_done(int sl, uint32_t len)
@@ -638,8 +631,7 @@ static void w2h_drain_partial(struct slot *s)
 	if (d->expect <= PKT) return;			/* headers and single packets: no point */
 	if (d->resync) return;				/* dropped anyway, see w2h_drain_abort */
 	if (oldest_full(d) >= 0) return;
-	d->progress = ehci_h3_xfer_progress(s->daddr, s->w_in);
-	uint32_t landed = d->progress & ~(PKT - 1);
+	uint32_t landed = ehci_h3_xfer_progress(s->daddr, s->w_in) & ~(PKT - 1);
 	/* The HC's byte count in the overlay runs ahead of the data: the newest
 	 * packet's first burst(s) were still in flight when we read them (64-128
 	 * stale bytes at packet starts, md5 mismatch). Stay one packet behind;
@@ -775,7 +767,7 @@ static void dir_reset(struct dir *d)
 {
 	memset(d->state, 0, sizeof d->state);
 	d->filling = d->draining = -1;
-	d->partial = false; d->fwd = 0; d->progress = 0;
+	d->partial = false; d->fwd = 0;
 }
 
 void bridge_init(void)
