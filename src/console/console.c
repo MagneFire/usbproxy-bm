@@ -159,8 +159,11 @@ static void run(char *s)
 	const char *c = argv[0];
 	char buf[48];
 	if (!strcmp(c, "help")) {
-		con_out("status log [bytes] reboot uboot hang hangnext panic mem <addr> [words] "
-			"fel reboot log [bytes|-f] mem <hex> [n] memw <hex> <hex> gp <n> [val] led <g|r> <0|1> detach attach hostxfer <in|out> <n> [slot] sofirq <0|1> cpuclk [MHz] powerauto [0|1] hostoff\n");
+		con_out("status  log [bytes|-f]  mem <hex> [n]  memw <hex> <hex>  gp <n> [hex]  led <g|r> <0|1>\n"
+			"reboot  fel  detach  attach  hang  hangnext  hangusb  panic\n"
+			"bridge: chunk [bytes]  cut [mask]  cutfloor [bytes]  cutlag [pkts]  cutcanary [0|1]  dma <mask>  zero\n"
+			"host:   ehci  nakrl [n]  hostxfer <in|out> <bytes> [slot]  hostxfer cnxn [m]  hostcycle [n]  hostoff\n"
+			"power:  cpuclk [MHz]  powerauto [0|1]  sofirq <0|1>\n");
 	} else if (!strcmp(c, "status")) {
 		cmd_status();
 	} else if (!strcmp(c, "log") && argc > 1 && !strcmp(argv[1], "-f")) {
