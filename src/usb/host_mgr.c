@@ -120,7 +120,9 @@ void tuh_mount_cb(uint8_t daddr)
 	tusb_speed_t sp = tuh_speed_get(daddr);
 	log_printf("host: device %u mounted, %04x:%04x, %s\n", daddr, vid, pid,
 		   sp == TUSB_SPEED_HIGH ? "high speed" : sp == TUSB_SPEED_FULL ? "FULL speed" : "low speed");
-	if (sp != TUSB_SPEED_HIGH && hs_retries < 8) {
+	if (sp == TUSB_SPEED_HIGH) {
+		hs_retries = 0;		/* the tries are per attach */
+	} else if (hs_retries < 8) {
 		/* The cold-boot chirp miss (DEVELOPMENT.md section 8): try again. */
 		hs_retries++;
 		reenum_pending = true;
