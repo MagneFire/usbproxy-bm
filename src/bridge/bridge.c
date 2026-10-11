@@ -22,6 +22,8 @@ struct dir {
 	uint8_t state[BRIDGE_NBUF];
 	uint32_t seq[BRIDGE_NBUF];	/* fill order */
 	uint8_t tag[BRIDGE_NBUF];	/* what the buffer holds, for the cycle stamps */
+	bool hdr[BRIDGE_NBUF];		/* watch IN: the buffer is an adb header */
+	bool resync;			/* watch IN: drop buffers until a header (gadget reconnected) */
 	uint32_t off[BRIDGE_NBUF];	/* bytes already forwarded early (cut-through) */
 	volatile uint32_t progress;	/* landed bytes of the filling buffer */
 	uint32_t fwd;			/* of those, handed on */
@@ -580,6 +582,10 @@ static void w2h_drain(struct slot *s)
 			d->state[i] = B_EMPTY;
 			continue;
 		}
+		if (d->resync) {
+			if (!d->hdr[i]) { d->state[i] = B_EMPTY; continue; }
+			d->resync = false;
+		}
 		d->hand_us += time_us() - d->t_fill_done; d->hand_n++;
 		d->state[i] = B_DRAINING;
 		if (!w2h_submit(s, i, d->off[i], d->len[i] - d->off[i], false))
@@ -596,6 +602,7 @@ static void w2h_drain_partial(struct slot *s)
 	if (!(cut_mask & 2)) return;
 	if (!s->gadget_up || !s->bound || d->draining >= 0 || d->filling < 0) return;
 	if (d->expect <= PKT) return;			/* headers and single packets: no point */
+	if (d->resync) return;				/* dropped anyway, see w2h_drain_abort */
 	if (oldest_full(d) >= 0) return;
 	d->progress = ehci_h3_xfer_progress(s->daddr, s->w_in);
 	uint32_t landed = d->progress & ~(PKT - 1);
@@ -659,13 +666,14 @@ void bridge_watch_in_done(int sl, uint32_t len, int result)
 		if (s->bound) w2h_fill(s);
 		return;
 	}
+	bool hdr = false;
 	if (s == &slots[0]) {
 		if (d->pending_payload) {
 			/* a chunk of the payload; short = framing lost, resync at a header */
 			d->pending_payload = len < d->expect ? 0 : d->pending_payload - len;
 		} else if (len == ADB_HDR_LEN) {
 			uint32_t cmd, a0, a1, dl;
-			if (adb_parse_hdr(d->buf[i], &cmd, &a0, &a1, &dl))
+			if ((hdr = adb_parse_hdr(d->buf[i], &cmd, &a0, &a1, &dl)))
 				d->pending_payload = dl;	/* read in BRIDGE_BUF pieces; legacy adbd never exceeds 4096 */
 			else
 				d->pending_payload = 0;		/* not adb framing: keep reading headers */
@@ -675,6 +683,7 @@ void bridge_watch_in_done(int sl, uint32_t len, int result)
 	}
 	if (len < d->fwd) d->fwd = len;			/* cannot happen; keep off <= len */
 	i = dir_fill_complete(d, len);
+	d->hdr[i] = hdr;
 	d->msgs++; d->bytes += len; if (!len) d->zlps++;
 	d->t_fill_done = time_us();
 	if (s == &slots[0]) cyc_fill_done(false, d, i, len, d->t_fill_done);
@@ -744,13 +753,31 @@ static void h2w_fill_abort(struct dir *d)
 	}
 }
 
+/* The gadget's IN drain is gone with a (re)configuration too. The host's
+ * new transport must start at a message boundary: an adb header that had
+ * not gone out is sent again whole, everything up to the next header is
+ * dropped (w2h_drain), including a cut-through piece's buffer still
+ * filling. The fastboot slot has no framing and drops the drain. */
+static void w2h_drain_abort(struct slot *s)
+{
+	struct dir *d = &s->w2h;
+	if (s == &slots[0]) d->resync = true;
+	int i = d->draining;
+	if (i < 0) return;
+	d->draining = -1;
+	bool partial = d->partial; d->partial = false;
+	if (partial) return;			/* the buffer is still FILLING */
+	if (d->resync && d->hdr[i]) d->state[i] = B_FULL;
+	else d->state[i] = B_EMPTY;
+}
+
 void bridge_gadget_ready(int sl, uint8_t ep_in, uint8_t ep_out)
 {
 	struct slot *s = &slots[sl & 1];
 	s->g_in = ep_in; s->g_out = ep_out; s->gadget_up = true;
 	/* Anything the gadget had in flight is gone with the (re)configuration. */
 	h2w_fill_abort(&s->h2w);
-	if (s->w2h.draining >= 0) { s->w2h.state[s->w2h.draining] = B_EMPTY; s->w2h.draining = -1; s->w2h.partial = false; }
+	w2h_drain_abort(s);
 	if (s == &slots[0]) { fr.pulsing = false; fr.payload_remaining = 0; fr.unsynced = false; fr.dropping = false; framer_building_clear(); }
 	h2w_fill(s);
 	w2h_drain(s);
@@ -762,7 +789,7 @@ void bridge_gadget_gone(int sl)
 	s->gadget_up = false;
 	if (s == &slots[0]) fr.pulsing = false;
 	h2w_fill_abort(&s->h2w);
-	if (s->w2h.draining >= 0) { s->w2h.state[s->w2h.draining] = B_EMPTY; s->w2h.draining = -1; s->w2h.partial = false; }
+	w2h_drain_abort(s);
 }
 
 static void adb_halt_in(struct slot *s, bool on)
