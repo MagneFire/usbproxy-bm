@@ -37,5 +37,5 @@ void console_poll(void);
 extern uint32_t g_entry_ms;
 extern int g_up;                /* 1 once GP1 has been cleared */
 extern bool g_manual_detach;    /* console `detach`: no automatic re-present */
-extern uint32_t g_represents;
+extern uint32_t g_represents, g_fs_retries;
 #endif

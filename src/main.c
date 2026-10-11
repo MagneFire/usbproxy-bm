@@ -59,6 +59,10 @@ static bool usb_progress_ok(void)
  * finishes in ~0.3 s. The console's `detach` suspends this. */
 bool g_manual_detach;
 uint32_t g_represents;
+/* A full-speed configuration is re-presented: a fresh attach gets high speed
+ * after a missed chirp. Full speed after FS_RETRIES is the link's own limit. */
+#define FS_RETRIES 3
+uint32_t g_fs_retries;
 /* Idle accounting for `status`: main-loop passes and WFIs in the last whole
  * second (idle = most passes end in a WFI; the 1 ms tick alone gives ~1000). */
 uint32_t g_loops_ps, g_wfis_ps, g_busy_us_ps;
@@ -66,15 +70,29 @@ static uint32_t loops, wfis, busy_us, rate_t0;
 static void gadget_present_check(void)
 {
 	static uint32_t since, dropped_at;
-	static bool dropped;
+	static bool dropped, fs_stale;
 	uint32_t now = time_ms();
 	if (!since) since = now;
 	if (g_manual_detach) { since = now; return; }
-	if (tud_mounted()) { since = now; return; }
 	if (dropped) {
 		if ((int32_t)(now - dropped_at) >= 100) { tud_connect(); dropped = false; since = now; }
 		return;
 	}
+	if (tud_mounted()) {
+		since = now;
+		/* the dropped configuration counts until the host resets us */
+		if (fs_stale && (int32_t)(now - dropped_at) < 2000) return;
+		fs_stale = false;
+		if (tud_speed_get() == TUSB_SPEED_HIGH) { g_fs_retries = 0; return; }
+		if (!TUD_OPT_HIGH_SPEED || g_fs_retries >= FS_RETRIES) return;
+		g_fs_retries++; g_represents++;
+		log_printf("usb: configured at full speed; re-presenting the gadget for high speed (try %lu)\n",
+			   (unsigned long)g_fs_retries);
+		tud_disconnect();
+		dropped = true; dropped_at = now; fs_stale = true;
+		return;
+	}
+	fs_stale = false;
 	if ((int32_t)(now - since) >= 2000) {
 		g_represents++;
 		log_printf("usb: not configured %lu ms after connect; re-presenting the gadget (%lu)\n",
