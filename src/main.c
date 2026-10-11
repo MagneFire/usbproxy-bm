@@ -8,11 +8,11 @@
 uint32_t g_entry_ms;
 int g_up;
 
-/* Progress-gated watchdog: once a watch is bound, both USB cores must keep
- * their frame counters moving (musb FRNUM while the Mac keeps the bus
- * awake, EHCI FRINDEX always); if either is stuck for 2 s the main loop
- * stops feeding the watchdog and the board resets 8 s later with a fault
- * record. Console `hangusb` halts the EHCI to prove it. */
+/* Progress-gated watchdog: once a watch is bound, the EHCI's frame counter
+ * (FRINDEX) must keep moving; if it is stuck for 2 s the main loop stops
+ * feeding the watchdog and the board resets 8 s later with a fault record.
+ * The musb's FRNUM only drives the gadget bus log below. Console `hangusb`
+ * halts the EHCI to prove it. */
 #define USBC_FRNUM      (0x01c19000u + 0x54)
 #define EHCI1_FRINDEX   (0x01c1b010u + 0x0c)
 bool g_wdt_withheld;		/* the gate stopped feeding: nothing else may */
@@ -26,7 +26,7 @@ static bool usb_progress_ok(void)
 	last_check = now;
 	bool bound = host_daddr() != 0;
 	uint32_t fr = readl(USBC_FRNUM) & 0x7ff, fi = readl(EHCI1_FRINDEX);
-	bool musb_ok = !tud_mounted() || tud_suspended() || fr != last_frnum;
+	bool sofs = !tud_mounted() || tud_suspended() || fr != last_frnum;
 	bool ehci_ok = fi != last_frindex;
 	last_frnum = fr; last_frindex = fi;
 	/* No SOFs from the Mac is not a fault: when the Mac sleeps the musb
@@ -36,19 +36,17 @@ static bool usb_progress_ok(void)
 	 * period). The gadget bus state is logged on change and only the EHCI
 	 * (our own host controller) can fail the gate. */
 	static bool sofs_idle;
-	if (musb_ok == sofs_idle) {
-		sofs_idle = !musb_ok;
+	if (sofs == sofs_idle) {
+		sofs_idle = !sofs;
 		log_printf("usb: gadget bus %s\n", sofs_idle ? "idle (no SOFs; host asleep or gone)" : "active again");
 	}
-	musb_ok = true;
-	if (!bound || (musb_ok && ehci_ok)) { stuck_since = 0; return true; }
+	if (!bound || ehci_ok) { stuck_since = 0; return true; }
 	if (!stuck_since) stuck_since = now;
 	if ((int32_t)(now - stuck_since) < 2000) return true;
 	lost = true;
 	g_wdt_withheld = true;
-	log_printf("watchdog: usb progress lost (musb %s, ehci %s); letting the watchdog fire\n",
-		   musb_ok ? "ok" : "stuck", ehci_ok ? "ok" : "stuck");
-	log_set_fault(musb_ok ? "ehci frame counter stuck" : "musb frame counter stuck");
+	log_printf("watchdog: usb progress lost (ehci stuck); letting the watchdog fire\n");
+	log_set_fault("ehci frame counter stuck");
 	return false;
 }
 
