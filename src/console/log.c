@@ -2,7 +2,6 @@
  * A versioned header makes a warm reset keep the previous boot's tail and a
  * fault record; a cold start (or a different firmware) re-initialises it.
  * Every line also goes to the UART. */
-#include <stdbool.h>
 #include <string.h>
 #include "fw.h"
 
@@ -19,7 +18,7 @@ extern char __logring_start[], __logring_end[];
 static volatile struct hdr *H;
 static volatile char *D;
 static uint32_t boots_now;
-static char prev_fault[64];
+static char prev_fault[sizeof ((struct hdr *)0)->fault];
 static bool prev_fault_valid, cur_fault_valid;
 
 void log_init(void)
@@ -97,18 +96,7 @@ void log_dump(size_t last, void (*out)(const char *))
 	if (!H) return;
 	uint32_t avail = H->total < H->size ? H->total : H->size;
 	if (last > avail) last = avail;
-	uint32_t pos = (H->head + H->size - (uint32_t)last) % H->size;
-	char chunk[65];
-	while (last) {
-		size_t n = last < 64 ? last : 64;
-		for (size_t i = 0; i < n; i++) {
-			chunk[i] = D[pos];
-			pos = (pos + 1) % H->size;
-		}
-		chunk[n] = 0;
-		out(chunk);
-		last -= n;
-	}
+	log_dump_at(H->total - (uint32_t)last, last, out);
 }
 
 void log_set_fault(const char *s)
