@@ -19,6 +19,7 @@ void bridge_gadget_out_done(int slot, uint32_t len);                 /* host -> 
 void bridge_gadget_out_progress(int slot, uint32_t bytes);           /* ISR: bytes landed so far in the current read */
 void bridge_gadget_in_done(int slot);                                /* gadget -> host write finished */
 void bridge_gadget_in_cleared(int slot);                             /* host cleared a halt on the IN endpoint */
+void bridge_gadget_out_cleared(int slot);                            /* host cleared a halt on the OUT endpoint */
 /* watch side (host_mgr.c) */
 void bridge_bind(int slot, uint8_t daddr, uint8_t ep_in, uint8_t ep_out, uint16_t in_mps);
 void bridge_unbind(int slot);

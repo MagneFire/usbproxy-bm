@@ -384,7 +384,12 @@ static void h2w_fill(struct slot *s)
 	int i = any_empty(d);
 	if (i < 0) return;
 	dir_fill_armed(d, i);
-	usbd_edpt_xfer(0, s->g_out, d->buf[i], (uint16_t)chunk, false);
+	if (!usbd_edpt_xfer(0, s->g_out, d->buf[i], (uint16_t)chunk, false)) {
+		/* the stack refuses a halted endpoint: read again once the host
+		 * clears the halt (bridge_gadget_out_cleared) */
+		d->state[i] = B_EMPTY; d->filling = -1;
+		log_printf("bridge: slot %d gadget OUT submit failed\n", (int)(s - slots));
+	}
 }
 
 static void w_out_cb(tuh_xfer_t *x);
@@ -842,6 +847,15 @@ void bridge_gadget_in_cleared(int sl)
 	if (s->w2h.draining >= 0) w2h_drain_abort(s);
 	w2h_drain(s);
 	w2h_drain_partial(s);
+}
+
+/* The host cleared a halt on OUT: the halt cancelled the read in flight with
+ * no completion, or a read was refused while halted. Read again. */
+void bridge_gadget_out_cleared(int sl)
+{
+	struct slot *s = &slots[sl & 1];
+	h2w_fill_abort(&s->h2w);
+	h2w_fill(s);
 }
 
 static void adb_halt_in(struct slot *s, bool on)
