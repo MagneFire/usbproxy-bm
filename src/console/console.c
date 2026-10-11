@@ -249,9 +249,11 @@ static void run(char *s)
 	} else if (!strcmp(c, "cutlag")) {
 		if (argc > 1) bridge_set_cut_lag(strtoul(argv[1], 0, 0));
 		snprintf(buf, sizeof buf, "cutlag=%lu\n", (unsigned long)bridge_cut_lag());
+		con_out(buf);
 	} else if (!strcmp(c, "cutcanary")) {
 		if (argc > 1) bridge_set_cut_canary(strtoul(argv[1], 0, 0));
 		snprintf(buf, sizeof buf, "cutcanary=%lu\n", (unsigned long)bridge_cut_canary());
+		con_out(buf);
 	} else if (!strcmp(c, "cutfloor")) {
 		if (argc > 1) bridge_set_cut_floor(strtoul(argv[1], 0, 0));
 		snprintf(buf, sizeof buf, "cutfloor=%lu\n", (unsigned long)bridge_cut_floor());
