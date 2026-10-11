@@ -718,12 +718,29 @@ void bridge_init(void)
 	for (int i = 0; i < 2; i++) { dir_reset(&slots[i].h2w); dir_reset(&slots[i].w2h); }
 }
 
+/* The gadget's OUT fill is gone with a (re)configuration. A cut-through
+ * partial of that buffer may still be on its way to the watch: keep the
+ * buffer until that completes (w_out_cb's h2w_drain frees it, nothing left),
+ * as bridge_watch_in_done does for the other direction. */
+static void h2w_fill_abort(struct dir *d)
+{
+	int i = d->filling;
+	if (i < 0) return;
+	d->filling = -1;
+	if (d->draining == i && d->fwd) {
+		d->len[i] = d->off[i] = d->fwd; d->seq[i] = d->next_seq++;
+		d->state[i] = B_FULL;
+	} else {
+		d->state[i] = B_EMPTY;
+	}
+}
+
 void bridge_gadget_ready(int sl, uint8_t ep_in, uint8_t ep_out)
 {
 	struct slot *s = &slots[sl & 1];
 	s->g_in = ep_in; s->g_out = ep_out; s->gadget_up = true;
 	/* Anything the gadget had in flight is gone with the (re)configuration. */
-	if (s->h2w.filling >= 0) { s->h2w.state[s->h2w.filling] = B_EMPTY; s->h2w.filling = -1; }
+	h2w_fill_abort(&s->h2w);
 	if (s->w2h.draining >= 0) { s->w2h.state[s->w2h.draining] = B_EMPTY; s->w2h.draining = -1; s->w2h.partial = false; }
 	if (s == &slots[0]) { fr.pulsing = false; fr.payload_remaining = 0; fr.unsynced = false; fr.dropping = false; framer_building_clear(); }
 	h2w_fill(s);
@@ -735,7 +752,7 @@ void bridge_gadget_gone(int sl)
 	struct slot *s = &slots[sl & 1];
 	s->gadget_up = false;
 	if (s == &slots[0]) fr.pulsing = false;
-	if (s->h2w.filling >= 0) { s->h2w.state[s->h2w.filling] = B_EMPTY; s->h2w.filling = -1; }
+	h2w_fill_abort(&s->h2w);
 	if (s->w2h.draining >= 0) { s->w2h.state[s->w2h.draining] = B_EMPTY; s->w2h.draining = -1; s->w2h.partial = false; }
 }
 
