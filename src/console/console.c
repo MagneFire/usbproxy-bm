@@ -102,11 +102,11 @@ static void cmd_status(void)
 		tud_suspended(), (unsigned long)g_represents, (unsigned long)g_fs_retries, tud_cdc_connected());
 	con_out(buf);
 	{
-		extern void dcd_h3_dpb_stats(uint32_t *, uint32_t *, uint32_t *, uint32_t *);
-		uint32_t w, e, x, b;
-		dcd_h3_dpb_stats(&w, &e, &x, &b);
-		snprintf(buf, sizeof buf, "musb_dpb=tx_waits:%lu tx_early:%lu rx_extra:%lu tx_busy_irqs:%lu\n",
-			 (unsigned long)w, (unsigned long)e, (unsigned long)x, (unsigned long)b);
+		extern void dcd_h3_dpb_stats(uint32_t *, uint32_t *);
+		uint32_t x, b;
+		dcd_h3_dpb_stats(&x, &b);
+		snprintf(buf, sizeof buf, "musb_dpb=rx_extra:%lu tx_busy_irqs:%lu\n",
+			 (unsigned long)x, (unsigned long)b);
 		con_out(buf);
 		extern void dcd_h3_fifo_stats(uint32_t *, uint32_t *, uint32_t *, uint32_t *);
 		uint32_t rd, rdn, wr, wrn;

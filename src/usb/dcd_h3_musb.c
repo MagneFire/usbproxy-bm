@@ -65,8 +65,7 @@ typedef struct
   pipe_state_t pipe0;
   pipe_state_t pipe[2][7];   /* pipe[direction][endpoint number - 1] */
   uint16_t     pipe_buf_is_fifo[2]; /* Bitmap. Each bit means whether 1:TU_FIFO or 0:POD. */
-  uint16_t     dpb_in;              /* H3: IN endpoints with double packet buffering */
-  uint32_t     dpb_tx_waits, dpb_tx_early, dpb_rx_extra, tx_busy_irqs; /* H3 DPB counters (console status) */
+  uint32_t     dpb_rx_extra, tx_busy_irqs; /* H3: packets drained behind the first (RX DPB), TX interrupts with TXPKTRDY still set */
   uint32_t     fifo_rd_us, fifo_rd_n, fifo_wr_us, fifo_wr_n;            /* PIO copy cost, packets >= 256 B */
   uint16_t     in_zlp_pending;      /* H3: bitmap, a zero-length IN transfer still to be sent */
   uint16_t     rx_held;             /* H3: bitmap, the OUT packet in the FIFO was read (back-pressure) */
@@ -595,25 +594,14 @@ static bool handle_xfer_in(uint_fast8_t ep_addr)
       __USBC_Dev_Tx_WriteDataComplete();
       return false;
     }
-    /* H3 DPB: the interrupt for the next-to-last packet arrives with the
-     * last one still in the other buffer; complete only once the FIFO is
-     * empty, so the transfer is really on the wire when the stack hears
-     * of it (another interrupt follows when that packet goes out). */
-    if ((_dcd.dpb_in & TU_BIT(epnum_minus1)) &&
-        USBC_REG_test_bit_w(USBC_BP_TXCSR_D_FIFO_NOT_EMPTY, USBC_REG_TXCSR(USBC0_BASE))) {
-      _dcd.dpb_tx_waits++;
-      return false;
-    }
     pipe->buf = NULL;
     _dcd.in_armed &= (uint16_t)~TU_BIT(epnum_minus1);
     return true;
   }
 
-  /* Never load the FIFO while TXPKTRDY is set (both DPB buffers full, or
-   * the single buffer still pending): the write would land on top of a
-   * packet waiting to go out. Linux's txstate() has the same guard. The
+  /* Never load the FIFO while TXPKTRDY is set (the packet before is still
+   * pending): the write would land on top of a packet waiting to go out. Linux's txstate() has the same guard. The
    * interrupt that frees the buffer brings us back. */
-  if (dma_ch[DMA_CHAN_TX].active && dma_ch[DMA_CHAN_TX].ep_addr == ep_addr) return false;
   if (USBC_REG_test_bit_w(USBC_BP_TXCSR_D_TX_READY, USBC_REG_TXCSR(USBC0_BASE))) {
     _dcd.tx_busy_irqs++;
     return false;
@@ -636,14 +624,6 @@ static bool handle_xfer_in(uint_fast8_t ep_addr)
     pipe->remaining = rem - len;
   }
   __USBC_Dev_Tx_WriteDataComplete();
-  // TU_LOG1(" TXCSRL%d = %x %d\r\n", epnum_minus1 + 1, regs->TXCSRL, rem - len);
-  /* H3 DPB: TXPKTRDY drops at once when the other buffer is free; fill it
-   * now instead of waiting for the interrupt that announces the same. */
-  if ((_dcd.dpb_in & TU_BIT(epnum_minus1)) && pipe->remaining &&
-      !USBC_REG_test_bit_w(USBC_BP_TXCSR_D_TX_READY, USBC_REG_TXCSR(USBC0_BASE))) {
-    _dcd.dpb_tx_early++;
-    return handle_xfer_in(ep_addr);
-  }
   return false;
 }
 
@@ -988,9 +968,9 @@ static void process_bus_reset(uint8_t rhport)
  * Device API
  *------------------------------------------------------------------*/
 
-void dcd_h3_dpb_stats(uint32_t *tx_waits, uint32_t *tx_early, uint32_t *rx_extra, uint32_t *tx_busy)
+void dcd_h3_dpb_stats(uint32_t *rx_extra, uint32_t *tx_busy)
 {
-  *tx_waits = _dcd.dpb_tx_waits; *tx_early = _dcd.dpb_tx_early; *rx_extra = _dcd.dpb_rx_extra; *tx_busy = _dcd.tx_busy_irqs;
+  *rx_extra = _dcd.dpb_rx_extra; *tx_busy = _dcd.tx_busy_irqs;
 }
 /* mean us per >=256-byte packet copied from / to the FIFO by PIO */
 void dcd_h3_fifo_stats(uint32_t *rd_us_x10, uint32_t *rd_n, uint32_t *wr_us_x10, uint32_t *wr_n)
@@ -1171,9 +1151,8 @@ bool dcd_edpt_open(uint8_t rhport, tusb_desc_endpoint_t const * ep_desc)
     /* ep1 adb: RX double-buffered, TX single. PIO loads into a
      * double-buffered TX FIFO lost their first 16 words about once per
      * 2000 packets while the RX side was busy (concurrent push+pull): the
-     * packet went out with the other buffer's old first 64 bytes. Same
-     * with and without the early second-buffer fill below, never with the
-     * inner DMA loading the FIFO, never single-buffered (20/20 soak runs).
+     * packet went out with the other buffer's old first 64 bytes. Never
+     * with the inner DMA loading the FIFO, never single-buffered.
      * Linux keeps the sunxi FIFOs single-buffered too. DPB gave no
      * throughput anyway (M3). */
     { {2048, 6, 1},   {1024, 6, 0} },
@@ -1190,7 +1169,6 @@ bool dcd_edpt_open(uint8_t rhport, tusb_desc_endpoint_t const * ep_desc)
   if (dir_in) {
     USBC_Writew(addr, USBC_REG_TXFIFOAD(USBC0_BASE));
     USBC_Writeb(fifosz, USBC_REG_TXFIFOSZ(USBC0_BASE));
-    if (dpb) _dcd.dpb_in |= TU_BIT(epn - 1); else _dcd.dpb_in &= (uint16_t)~TU_BIT(epn - 1);
   } else {
     USBC_Writew(addr, USBC_REG_RXFIFOAD(USBC0_BASE));
     USBC_Writeb(fifosz, USBC_REG_RXFIFOSZ(USBC0_BASE));
