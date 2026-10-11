@@ -129,8 +129,8 @@ static void __attribute__((noreturn)) boot_fel(void)
 	outf("\nboot0 " GITREV " (FEL): entry %lu ms\n", (unsigned long)t0);
 	unsigned long size = dram_init();
 	outf("boot0: DRAM %lu MiB in %lu ms\n", size >> 20, (unsigned long)(time_ms() - t0));
-	volatile uint32_t *dram_size_field = (volatile uint32_t *)0x24;   /* header field, sunxi-fel prints it */
-	*dram_size_field = size >> 20;
+	extern volatile uint32_t egon_dram_size;	/* start.S header, sunxi-fel prints it */
+	egon_dram_size = size >> 20;
 	/* Card probe, so the SD driver and the card layout can be checked
 	 * over FEL without writing anything: our own header at sector 16,
 	 * the firmware's at 0x18800. */

@@ -20,6 +20,8 @@ _start:
         .word   0                       /* 0x18 fel_script_address (sunxi-fel) */
         .word   0                       /* 0x1c fel_uEnv_length    (sunxi-fel) */
         .word   0                       /* 0x20 dt_name_offset */
+        .global egon_dram_size
+egon_dram_size:
         .word   0                       /* 0x24 dram_size, MiB: we fill it for sunxi-fel */
         .word   0                       /* 0x28 boot_media (BROM) */
         .space  13 * 4                  /* 0x2c string pool, header = 0x60 bytes */
