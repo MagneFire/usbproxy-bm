@@ -47,13 +47,14 @@ static void __attribute__((noreturn)) enter_fel(unsigned why)
 }
 
 /* The uImage header the card boot trusts: size within the firmware's
- * region, load/entry inside DRAM. The FEL card probe reads into DRAM with the
- * same fields, so it applies the same checks. */
+ * region, load/entry word aligned inside DRAM (the SD driver stores whole
+ * words, which fault unaligned with the MMU off). The FEL card probe reads
+ * into DRAM with the same fields, so it applies the same checks. */
 static bool image_header_ok(const struct image_header *h)
 {
 	uint32_t fsize = be32(h->size), ep = be32(h->ep), load = be32(h->load);
 	return be32(h->magic) == IH_MAGIC && fsize != 0 && fsize <= FW_MAX_BYTES &&
-	       load >= H3_DRAM + 0x8000 && load <= H3_DRAM + (64u << 20) && ep == load;
+	       load >= H3_DRAM + 0x8000 && load <= H3_DRAM + (64u << 20) && !(load & 3) && ep == load;
 }
 
 static void __attribute__((noreturn)) boot_card(void)
