@@ -31,7 +31,13 @@ FELFLASH_DATA = 0x41000000      # data, readback right after it
 FELFLASH_MAGIC = 0x48534c46     # "FLSH"
 FELFLASH_STATUS = {0: "ok", 1: "bad magic", 2: "data crc (transfer)", 3: "mmc init",
                    4: "write", 5: "readback", 6: "verify crc"}
-# tools/felreset.S: arm the watchdog for a whole-system reset
+# Leave FEL: arm the watchdog (WDT0, CFG +0x14 = whole-system reset,
+# MODE +0x18 = enable, shortest interval) and spin.
+#     ldr  r0, =0x01c20ca0
+#     mov  r1, #1
+#     str  r1, [r0, #0x14]
+#     str  r1, [r0, #0x18]
+# 1:  b    1b
 FELRESET_BLOB = bytes.fromhex("0c009fe50110a0e3141080e5181080e5feffffeaa00cc201")
 FELRESET_ADDR = 0x2000
 
