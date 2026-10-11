@@ -42,6 +42,9 @@ struct dir {
 	uint32_t verified;		/* watch IN cut-through: bytes of the filling buffer seen landed (canary gone) */
 	uint32_t expect;		/* watch IN: bytes to read next (24 = adb header, else payload) */
 	uint32_t pending_payload;	/* parsed from the last header; 0 = next read is a header */
+	uint32_t errs;			/* watch IN: failed reads in a row */
+	bool retry;			/* watch IN: read again at retry_at */
+	uint32_t retry_at;
 };
 
 struct slot {
@@ -536,6 +539,15 @@ static void w_in_cb(tuh_xfer_t *x);
  * a 24-byte header, then exactly its data_length (the appliance's sized
  * bulk-IN reads). The fastboot slot keeps whole-buffer reads (its
  * device->host messages are short text). */
+/* A failed watch IN read is retried from bridge_poll after a pause, not at
+ * once: a stalled endpoint fails every read. */
+#define W2H_RETRY_MS 10
+static void w2h_retry_later(struct dir *d)
+{
+	d->retry = true;
+	d->retry_at = time_ms() + W2H_RETRY_MS;
+}
+
 static void w2h_fill(struct slot *s)
 {
 	struct dir *d = &s->w2h;
@@ -567,6 +579,7 @@ static void w2h_fill(struct slot *s)
 	if (!tuh_edpt_xfer(&x)) {
 		d->state[i] = B_EMPTY; d->filling = -1;
 		log_printf("bridge: slot %d watch IN submit failed\n", (int)(s - slots));
+		w2h_retry_later(d);
 	}
 }
 
@@ -668,7 +681,11 @@ void bridge_watch_in_done(int sl, uint32_t len, int result)
 	int i = d->filling;
 	if (i < 0) return;
 	if (result != XFER_RESULT_SUCCESS) {
-		log_printf("bridge: slot %d watch IN result %d\n", sl, result);
+		if (!d->errs++)
+			log_printf("bridge: slot %d watch IN result %d\n", sl, result);
+		/* what the failed read took of a message is lost: resume at a header */
+		d->pending_payload = 0;
+		if (s == &slots[0]) d->resync = true;
 		d->filling = -1;
 		if (d->fwd && d->draining == i) {
 			/* a partial of this buffer is on its way to the Mac: let it
@@ -677,9 +694,12 @@ void bridge_watch_in_done(int sl, uint32_t len, int result)
 		} else {
 			d->state[i] = B_EMPTY;
 		}
-		if (s->bound) w2h_fill(s);
+		w2h_retry_later(d);
 		return;
 	}
+	if (d->errs > 1)
+		log_printf("bridge: slot %d watch IN reads again after %lu failures\n", sl, (unsigned long)d->errs);
+	d->errs = 0;
 	bool hdr = false;
 	if (s == &slots[0]) {
 		if (d->pending_payload) {
@@ -729,6 +749,13 @@ bool bridge_adb_pulsing(void) { return fr.pulsing; }
 static void adb_slot_poll(struct slot *s);
 void bridge_poll(void)
 {
+	for (int k = 0; k < 2; k++) {
+		struct slot *r = &slots[k];
+		if (r->w2h.retry && (int32_t)(time_ms() - r->w2h.retry_at) >= 0) {
+			r->w2h.retry = false;
+			w2h_fill(r);
+		}
+	}
 	struct slot *s = &slots[0];
 	adb_slot_poll(s);
 	if (!s->bound) return;
@@ -833,6 +860,7 @@ void bridge_bind(int sl, uint8_t daddr, uint8_t ep_in, uint8_t ep_out, uint16_t 
 	s->daddr = daddr; s->w_in = ep_in; s->w_out = ep_out; s->bound = true;
 	s->w_in_mps = in_mps ? in_mps : 512;
 	s->w2h.pending_payload = 0;
+	s->w2h.errs = 0; s->w2h.retry = false;
 	if (s == &slots[0]) {
 		/* whatever the host still owes of the previous message belonged to
 		 * the device that is gone: drop that tail, resume at the boundary */
