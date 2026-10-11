@@ -723,15 +723,6 @@ void bridge_gadget_in_done(int sl)
 	w2h_fill(s);
 }
 
-/* A drain the stack refused on the halted endpoint went back to FULL with
- * no completion to retry it: the host's CLEAR_FEATURE is that event. */
-void bridge_gadget_in_cleared(int sl)
-{
-	struct slot *s = &slots[sl & 1];
-	w2h_drain(s);
-	w2h_drain_partial(s);
-}
-
 /* Main loop: forward what has landed so far (both directions, adb slot). */
 bool bridge_adb_pulsing(void) { return fr.pulsing; }
 
@@ -813,6 +804,17 @@ void bridge_gadget_gone(int sl)
 	if (s == &slots[0]) fr.pulsing = false;
 	h2w_fill_abort(&s->h2w);
 	w2h_drain_abort(s);
+}
+
+/* The host cleared a halt on IN. The halt cancelled the drain in flight
+ * with no completion, and a drain refused while halted went back to FULL:
+ * take the first back as a reconnect does, then retry both. */
+void bridge_gadget_in_cleared(int sl)
+{
+	struct slot *s = &slots[sl & 1];
+	if (s->w2h.draining >= 0) w2h_drain_abort(s);
+	w2h_drain(s);
+	w2h_drain_partial(s);
 }
 
 static void adb_halt_in(struct slot *s, bool on)
