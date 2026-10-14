@@ -51,6 +51,9 @@ struct slot {
 	uint8_t daddr, w_in, w_out;	/* watch */
 	uint16_t w_in_mps;		/* watch IN wMaxPacketSize */
 	bool reply_due;			/* fastboot: a command went out, its reply is not complete */
+	bool fb_upload;			/* fastboot: the command was upload/fetch, a DATA reply sends data */
+	uint32_t fb_host_left;		/* fastboot: download bytes the host still sends */
+	uint32_t fb_dev_left;		/* fastboot: upload bytes the watch still sends */
 	struct dir h2w;			/* host (gadget OUT) -> watch (OUT) */
 	struct dir w2h;			/* watch (IN) -> host (gadget IN) */
 };
@@ -512,6 +515,51 @@ static void w_out_cb(tuh_xfer_t *x)
 
 static void w2h_fill(struct slot *s);
 
+/* ---- fastboot reply tracking ------------------------------------------
+ * The bootloader only sends in reply to a command, and a continuous IN poll
+ * while it has nothing to send makes it drop off high speed: the slot reads
+ * from the watch only while a reply is due. A reply ends with OKAY or FAIL,
+ * INFO and TEXT lines precede it. DATA%08x hands over a data phase: after
+ * download the host sends that many bytes, after upload or fetch the watch
+ * does, and either way OKAY or FAIL follows. Data bytes are counted, never
+ * parsed as commands or replies. */
+static uint32_t fb_hex8(const uint8_t *p)
+{
+	uint32_t v = 0;
+	for (int k = 0; k < 8; k++) {
+		uint8_t c = p[k];
+		v = v << 4 | (c >= 'a' ? c - 'a' + 10 : c >= 'A' ? c - 'A' + 10 : c - '0');
+	}
+	return v;
+}
+
+static void fb_host_sent(struct slot *s, const uint8_t *p, uint32_t len)
+{
+	if (s->fb_host_left) {
+		s->fb_host_left = len < s->fb_host_left ? s->fb_host_left - len : 0;
+	} else if (len) {
+		s->fb_upload = (len >= 6 && !memcmp(p, "upload", 6)) || (len >= 6 && !memcmp(p, "fetch:", 6));
+	}
+	s->reply_due = true;
+}
+
+/* A watch IN read of len bytes landed. */
+static void fb_watch_sent(struct slot *s, const uint8_t *p, uint32_t len)
+{
+	if (s->fb_dev_left) {
+		s->fb_dev_left = len < s->fb_dev_left ? s->fb_dev_left - len : 0;
+		return;
+	}
+	if (len < 4) return;
+	if (!memcmp(p, "OKAY", 4) || !memcmp(p, "FAIL", 4)) {
+		s->reply_due = false;
+	} else if (!memcmp(p, "DATA", 4)) {
+		uint32_t n = len >= 12 ? fb_hex8(p + 4) : 0;
+		if (s->fb_upload) s->fb_dev_left = n;
+		else { s->fb_host_left = n; s->reply_due = false; }	/* the host's data re-arms the poll */
+	}
+}
+
 void bridge_watch_out_done(int sl, uint32_t len, int result)
 {
 	struct slot *s = &slots[sl & 1];
@@ -525,7 +573,7 @@ void bridge_watch_out_done(int sl, uint32_t len, int result)
 	if (result != XFER_RESULT_SUCCESS)
 		log_printf("bridge: slot %d watch OUT result %d (%lu)\n", sl, result, (unsigned long)len);
 	if (s == &slots[0]) cyc_drain_done(true, d, i, now);
-	else if (result == XFER_RESULT_SUCCESS) { s->reply_due = true; w2h_fill(s); }
+	else if (result == XFER_RESULT_SUCCESS) { fb_host_sent(s, d->buf[i], len); w2h_fill(s); }
 	if (!partial && d->zlp[i]) {
 		/* the data is out, its zero-length packet next (oldest_full: it keeps its seq) */
 		d->zlp[i] = false; d->off[i] = d->len[i] = 0;
@@ -561,9 +609,7 @@ static void w2h_fill(struct slot *s)
 {
 	struct dir *d = &s->w2h;
 	if (!s->bound || d->filling >= 0) return;
-	/* fastboot: the bootloader only answers commands, and a continuous
-	 * IN poll while it has nothing to send makes it drop off high speed */
-	if (s != &slots[0] && !s->reply_due) return;
+	if (s != &slots[0] && !s->reply_due) return;	/* fastboot: no reply due */
 	int i = any_empty(d);
 	if (i < 0) return;
 	uint32_t want = BRIDGE_BUF;
@@ -720,10 +766,7 @@ void bridge_watch_in_done(int sl, uint32_t len, int result)
 			d->pending_payload = 0;
 		}
 	}
-	/* fastboot: OKAY, FAIL and DATA end a reply; INFO and TEXT do not */
-	if (s != &slots[0] && len >= 4 && (!memcmp(d->buf[i], "OKAY", 4) || !memcmp(d->buf[i], "FAIL", 4) ||
-					   !memcmp(d->buf[i], "DATA", 4)))
-		s->reply_due = false;
+	if (s != &slots[0]) fb_watch_sent(s, d->buf[i], len);
 	if (len < d->fwd) d->fwd = len;			/* cannot happen; keep off <= len */
 	i = dir_fill_complete(d, len);
 	d->hdr[i] = hdr;
@@ -885,7 +928,7 @@ void bridge_bind(int sl, uint8_t daddr, uint8_t ep_in, uint8_t ep_out, uint16_t 
 {
 	struct slot *s = &slots[sl & 1];
 	s->daddr = daddr; s->w_in = ep_in; s->w_out = ep_out; s->bound = true;
-	s->reply_due = false;
+	s->reply_due = false; s->fb_upload = false; s->fb_host_left = s->fb_dev_left = 0;
 	s->w_in_mps = in_mps ? in_mps : 512;
 	s->w2h.pending_payload = 0;
 	s->w2h.errs = 0; s->w2h.retry = false;
