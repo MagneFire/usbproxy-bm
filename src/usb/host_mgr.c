@@ -19,7 +19,7 @@ struct hslot { uint8_t daddr, ep_in, ep_out; uint16_t in_mps; bool bound, bridge
 static struct hslot slots[2];
 static uint8_t cur_daddr;
 static uint32_t reclaim_at, reenum_at;
-static unsigned reclaims, hs_retries;
+static unsigned reclaims, hs_retries, port_reenables;
 static bool reenum_pending;
 /* software attach/detach cycles (console `hostcycle N`): unmount + re-enumerate */
 static unsigned cycles_left, cycle_mounts, cycle_fail;
@@ -185,6 +185,16 @@ void host_mgr_poll(void)
 				log_printf("port: %s%s portsc=%08lx\n", (cc & 1) ? "connected" : "DISCONNECTED",
 					   (cc & 2) ? ", enabled" : "", (unsigned long)p);
 			last_portsc_cc = cc;
+			/* The HC disabled the port under a mounted device that is
+			 * still attached (it fell back to full speed, or a bus
+			 * fault): no connect change follows, so re-enumerate, as
+			 * Linux's hub driver does ("re-enabling"). */
+			if (cc == 1 && cur_daddr && !reenum_pending) {
+				port_reenables++;
+				reenum_pending = true;
+				reenum_at = now + 10;
+				log_printf("host: port disabled under device %u; re-enumerating (%u)\n", cur_daddr, port_reenables);
+			}
 		}
 	}
 	if (ehci_h3_port_handed_over) {
@@ -327,10 +337,10 @@ int host_test_xfer(int slot, bool in, uint32_t len)
 
 void host_status_line(char *buf, unsigned n)
 {
-	snprintf(buf, n, "host_link=%s\nhost_daddr=%u\nhost_portsc=%08lx\nhost_reclaims=%u\nhost_hs_retries=%u\n"
+	snprintf(buf, n, "host_link=%s\nhost_daddr=%u\nhost_portsc=%08lx\nhost_reclaims=%u\nhost_hs_retries=%u\nhost_reenables=%u\n"
 		 "hslot0=bound:%d daddr:%u in:%02x out:%02x pkts %lu/%lu\n"
 		 "hslot1=bound:%d daddr:%u in:%02x out:%02x pkts %lu/%lu\n",
-		 host_link_speed(), cur_daddr, (unsigned long)hcd_h3_portsc(), reclaims, hs_retries,
+		 host_link_speed(), cur_daddr, (unsigned long)hcd_h3_portsc(), reclaims, hs_retries, port_reenables,
 		 slots[0].bound, slots[0].daddr, slots[0].ep_in, slots[0].ep_out, (unsigned long)slots[0].in_pkts, (unsigned long)slots[0].out_pkts,
 		 slots[1].bound, slots[1].daddr, slots[1].ep_in, slots[1].ep_out, (unsigned long)slots[1].in_pkts, (unsigned long)slots[1].out_pkts);
 }
