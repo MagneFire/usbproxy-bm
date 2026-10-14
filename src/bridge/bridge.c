@@ -504,6 +504,15 @@ void bridge_gadget_out_done(int sl, uint32_t len)
 	d->zlp[i] = s != &slots[0] && len && len < chunk && len % mps == 0;
 	d->t_fill_done = time_us();
 	if (s == &slots[0]) cyc_fill_done(true, d, i, len, d->t_fill_done);
+	/* fastboot with no watch: the command waits for the next bind, but
+	 * fastboot sends one command per reply, so a newer one means the
+	 * client of the older one gave up */
+	if (s != &slots[0] && !s->bound) {
+		int n = 0;
+		for (int k = 0; k < BRIDGE_NBUF; k++)
+			if (k != i && d->state[k] == B_FULL) { d->state[k] = B_EMPTY; n++; }
+		if (n) log_printf("bridge: slot 1 dropped %d held packet(s) for a newer command\n", n);
+	}
 	h2w_drain(s);
 	h2w_fill(s);
 }
@@ -892,6 +901,15 @@ void bridge_gadget_gone(int sl)
 	if (s == &slots[0]) fr.pulsing = false;
 	h2w_fill_abort(&s->h2w);
 	w2h_drain_abort(s);
+	/* fastboot: the host's sessions end with the gadget, so commands still
+	 * held for the watch and replies it has not read belong to none */
+	if (s != &slots[0]) {
+		for (int k = 0; k < BRIDGE_NBUF; k++) {
+			if (s->h2w.state[k] == B_FULL) s->h2w.state[k] = B_EMPTY;
+			if (s->w2h.state[k] == B_FULL) s->w2h.state[k] = B_EMPTY;
+		}
+		s->fb_host_left = s->fb_dev_left = 0;
+	}
 }
 
 /* The host cleared a halt on IN. The halt cancelled the drain in flight
