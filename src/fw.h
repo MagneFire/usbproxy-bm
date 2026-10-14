@@ -26,6 +26,9 @@ uint32_t log_boots(void);
 
 /* usb */
 const char *gadget_serial(void);
+void gadget_set(bool bridge, const char *serial);	/* descriptors only; NULL serial = GADGET_SERIAL */
+bool gadget_full(void);		/* the bridge interfaces are presented */
+void gadget_watch(const char *serial);	/* host_mgr: a watch mounted (NULL: no serial read) */
 
 /* console */
 void console_init(void);
@@ -39,4 +42,5 @@ extern uint32_t g_represents, g_fs_retries;
 extern bool g_wdt_withheld;
 extern uint32_t g_loops_ps, g_wfis_ps, g_busy_us_ps;   /* last second, for `status` */
 extern bool g_power_auto;       /* clocks follow the bridge (console `powerauto`) */
+extern uint32_t g_sticky_ms;    /* no watch this long: back to the idle gadget (console `sticky`) */
 #endif

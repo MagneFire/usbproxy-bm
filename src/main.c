@@ -1,5 +1,6 @@
 /* usbproxy-bm: bring-up and the superloop (USB stacks, bridge, console,
  * watchdog, power). */
+#include <string.h>
 #include "fw.h"
 #include "gitrev.h"            /* generated: build/gitrev.h */
 #include "tusb.h"
@@ -66,10 +67,20 @@ uint32_t g_fs_retries;
  * second (idle = most passes end in a WFI; the 1 ms tick alone gives ~1000). */
 uint32_t g_loops_ps, g_wfis_ps, g_busy_us_ps;
 static uint32_t loops, wfis, busy_us, rate_t0;
+static uint32_t since, dropped_at;
+static bool dropped, fs_stale;
+
+/* Drop the pull-up; gadget_present_check connects again 100 ms later. The
+ * dropped configuration counts until the host resets us. */
+static void gadget_represent(void)
+{
+	g_represents++;
+	tud_disconnect();
+	dropped = true; dropped_at = time_ms(); fs_stale = true;
+}
+
 static void gadget_present_check(void)
 {
-	static uint32_t since, dropped_at;
-	static bool dropped, fs_stale;
 	uint32_t now = time_ms();
 	if (!since) since = now;
 	if (g_manual_detach) { since = now; return; }
@@ -79,26 +90,79 @@ static void gadget_present_check(void)
 	}
 	if (tud_mounted()) {
 		since = now;
-		/* the dropped configuration counts until the host resets us */
 		if (fs_stale && (int32_t)(now - dropped_at) < 2000) return;
 		fs_stale = false;
 		if (tud_speed_get() == TUSB_SPEED_HIGH) { g_fs_retries = 0; return; }
 		if (!TUD_OPT_HIGH_SPEED || g_fs_retries >= FS_RETRIES) return;
-		g_fs_retries++; g_represents++;
+		g_fs_retries++;
 		log_printf("usb: configured at full speed; re-presenting the gadget for high speed (try %lu)\n",
 			   (unsigned long)g_fs_retries);
-		tud_disconnect();
-		dropped = true; dropped_at = now; fs_stale = true;
+		gadget_represent();
 		return;
 	}
 	fs_stale = false;
 	if ((int32_t)(now - since) >= 2000) {
-		g_represents++;
 		log_printf("usb: not configured %lu ms after connect; re-presenting the gadget (%lu)\n",
-			   (unsigned long)(now - since), (unsigned long)g_represents);
-		tud_disconnect();
-		dropped = true; dropped_at = now;
+			   (unsigned long)(now - since), (unsigned long)g_represents + 1);
+		gadget_represent();
+		fs_stale = false;
 	}
+}
+
+/* The gadget's shape follows the watch: the full gadget with the serial of
+ * the last watch seen, or the console alone once no watch has been mounted
+ * for g_sticky_ms. A reboot or an adb/fastboot switch of the same watch
+ * keeps the gadget (the bridge's halt pulse and CNXN replay cover it); a
+ * different watch re-enumerates it. At boot the gadget is held off until
+ * the watch's serial is known, so the Mac sees one enumeration. */
+#define BOOT_HOLD_EMPTY_MS 500	/* port still empty: present the idle gadget */
+#define BOOT_HOLD_MAX_MS   2000
+uint32_t g_sticky_ms = 60000;
+static bool held = true;
+static uint32_t watch_seen_ms;
+
+static void gadget_release(void)
+{
+	held = false;
+	tud_connect();
+	since = time_ms();
+	log_printf("usb: gadget %s presented (%s)\n", gadget_serial(), gadget_full() ? "adb + fastboot" : "console only");
+}
+
+void gadget_watch(const char *serial)
+{
+	watch_seen_ms = time_ms();
+	if (!serial || !*serial) serial = NULL;
+	if (held) {
+		gadget_set(true, serial);
+		gadget_release();
+		return;
+	}
+	if (gadget_full() && !strcmp(gadget_serial(), serial ? serial : GADGET_SERIAL))
+		return;
+	log_printf("usb: watch %s; re-presenting the gadget\n", serial ? serial : "without a serial");
+	gadget_represent();
+	gadget_set(true, serial);
+	bridge_forget_cnxn();
+}
+
+static void gadget_follow(void)
+{
+	uint32_t now = time_ms();
+	if (held) {
+		uint32_t t = now - g_entry_ms;
+		bool empty = !(hcd_h3_portsc() & 1u);	/* PORTSC CCS */
+		if ((empty && t >= BOOT_HOLD_EMPTY_MS) || t >= BOOT_HOLD_MAX_MS) {
+			if (!empty) log_printf("usb: no watch serial after %lu ms; presenting the idle gadget\n", (unsigned long)t);
+			gadget_release();
+		}
+		return;
+	}
+	if (host_bridged()) { watch_seen_ms = now; return; }
+	if (!gadget_full() || (int32_t)(now - watch_seen_ms) < (int32_t)g_sticky_ms) return;
+	log_printf("usb: no watch for %lu ms; re-presenting the idle gadget\n", (unsigned long)(now - watch_seen_ms));
+	gadget_represent();
+	gadget_set(false, NULL);
 }
 
 /* Power state follows the bridge: full clocks while a device is bound (the
@@ -152,7 +216,8 @@ int main(void)
 	bridge_init();
 	const tusb_rhport_init_t rh_init = { .role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_HIGH };
 	tusb_init(0, &rh_init);
-	log_printf("usb: gadget %s initialised, waiting for the host\n", gadget_serial());
+	tud_disconnect();		/* dcd_init connected; held until gadget_follow */
+	log_printf("usb: gadget initialised, held until the watch side is known\n");
 	const tusb_rhport_init_t host_init = { .role = TUSB_ROLE_HOST, .speed = TUSB_SPEED_HIGH };
 	tusb_rhport_init(1, &host_init);
 	log_printf("usb: host on EHCI1 initialised\n");
@@ -165,7 +230,8 @@ int main(void)
 		console_poll();
 		if (usb_progress_ok())
 			wdt_feed();
-		gadget_present_check();
+		gadget_follow();
+		if (!held) gadget_present_check();
 		power_follow();
 		/* Sleep only when nothing is queued, decided with IRQs masked so an
 		 * event raised between the check and the wfi still wakes us (WFI

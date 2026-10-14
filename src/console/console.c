@@ -89,8 +89,8 @@ static void cmd_status(void)
 {
 	char buf[200];
 	snprintf(buf, sizeof buf,
-		"build=%s\nserial=%s\nuptime_ms=%lu\nentry_ms=%lu\nticks=%lu\nboots=%lu\nup=%d\n",
-		GITREV, gadget_serial(), (unsigned long)time_ms(), (unsigned long)g_entry_ms,
+		"build=%s\nserial=%s\ngadget=%s\nuptime_ms=%lu\nentry_ms=%lu\nticks=%lu\nboots=%lu\nup=%d\n",
+		GITREV, gadget_serial(), gadget_full() ? "full" : "idle", (unsigned long)time_ms(), (unsigned long)g_entry_ms,
 		(unsigned long)tick_count(), (unsigned long)log_boots(), g_up);
 	con_out(buf);
 	snprintf(buf, sizeof buf, "idle=loops:%lu wfis:%lu busy_us:%lu (per s)\n",
@@ -147,7 +147,7 @@ static void run(char *s)
 	char buf[48];
 	if (!strcmp(c, "help")) {
 		con_out("status  log [bytes|-f]  mem <hex> [n]  memw <hex> <hex>  gp <n> [hex]  led <g|r> <0|1>\n"
-			"reboot  fel  detach  attach  hang  hangnext  hangusb  panic\n"
+			"reboot  fel  detach  attach  sticky [ms]  hang  hangnext  hangusb  panic\n"
 			"bridge: chunk [bytes]  cut [mask]  cutfloor [bytes]  cutlag [pkts]  cutcanary [0|1]  dma <mask>  zero\n"
 			"host:   ehci  nakrl [n]  hostxfer <in|out> <bytes> [slot]  hostxfer cnxn [m]  hostcycle [n]  hostoff\n"
 			"power:  cpuclk [MHz]  powerauto [0|1]  sofirq <0|1>\n");
@@ -271,6 +271,10 @@ static void run(char *s)
 	} else if (!strcmp(c, "hostoff")) {
 		log_printf("hostoff: EHCI1/OHCI1/PHY1 off until the next reboot (power measurement)\n");
 		usbphy1_off();
+	} else if (!strcmp(c, "sticky")) {
+		if (argc > 1) g_sticky_ms = strtoul(argv[1], 0, 0);
+		snprintf(buf, sizeof buf, "sticky=%lu ms\n", (unsigned long)g_sticky_ms);
+		con_out(buf);
 	} else if (!strcmp(c, "detach")) {
 		g_manual_detach = true;
 		tud_disconnect();

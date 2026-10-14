@@ -30,6 +30,7 @@ bool bridge_host_pending(void);		/* an EHCI transfer is in flight: poll, do not 
 void bridge_poll(void);			/* main loop: cut-through forwarding */
 void bridge_stats_reset(void);
 bool bridge_adb_pulsing(void);		/* adb IN halt pulse in progress */
+void bridge_forget_cnxn(void);		/* the gadget re-enumerates: the host's next CNXN is its own */
 /* Largest single transfer the datapath reads from either side (console
  * `chunk`): smaller chunks overlap the fill of one with the drain of the
  * previous at the price of more completions per message. */

@@ -743,6 +743,15 @@ void bridge_gadget_in_done(int sl)
 
 bool bridge_adb_pulsing(void) { return fr.pulsing; }
 
+/* After a re-enumeration the Mac's adb opens a new transport and sends its
+ * own CNXN, later than the replay grace: a recorded one would reach the
+ * device first. */
+void bridge_forget_cnxn(void)
+{
+	fr.cnxn_len = 0;
+	fr.cnxn_pending = false;
+}
+
 static void adb_slot_poll(struct slot *s);
 /* Main loop: forward what has landed so far (both directions, adb slot). */
 void bridge_poll(void)

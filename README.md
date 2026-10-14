@@ -8,6 +8,17 @@ firmware from the SD card and jumps to it. The firmware is a superloop on
 TinyUSB (musb gadget on the OTG port, EHCI host on the USB-A port) with a
 CDC-ACM console on the gadget.
 
+## The gadget
+
+With a watch attached the gadget is the console plus adb and fastboot,
+carrying the watch's serial, so `adb devices` names the watch. It keeps that
+serial while the watch reboots or switches between adb and fastboot, so the
+console stays open; a different watch re-enumerates it. With no watch for
+60 s (console `sticky [ms]`) it is the console alone with serial
+`USBPROXYBM`. The console's port name changes with the gadget: on macOS
+`/dev/cu.usbmodemUSBPROXYBM1` idle, and with a watch a name from the serial
+or, for a long serial, from the port (`/dev/cu.usbmodem101`).
+
 ## Build
 
 Needs `arm-none-eabi-gcc`, `mkimage` (u-boot-tools) and Python 3.

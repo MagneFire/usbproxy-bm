@@ -111,6 +111,34 @@ void tuh_enum_descriptor_device_cb(uint8_t daddr, const tusb_desc_device_t *d)
 	log_printf("host: device %u descriptor %04x:%04x ep0 %u\n", daddr, d->idVendor, d->idProduct, d->bMaxPacketSize0);
 }
 
+/* The watch's serial for the gadget (main.c gadget_watch): printable ASCII
+ * of the string descriptor, at most 30 characters (the gadget's limit). */
+CFG_TUH_MEM_SECTION CFG_TUH_MEM_ALIGN static uint16_t serial_desc[32];
+
+static void serial_done(tuh_xfer_t *xfer)
+{
+	if (xfer->daddr != cur_daddr) return;
+	char s[31];
+	unsigned n = 0;
+	if (xfer->result == XFER_RESULT_SUCCESS && xfer->actual_len >= 2) {
+		unsigned len = (serial_desc[0] & 0xff) < xfer->actual_len ? (serial_desc[0] & 0xff) : xfer->actual_len;
+		for (unsigned i = 1; i < len / 2 && n < sizeof s - 1; i++)
+			if (serial_desc[i] > 0x20 && serial_desc[i] < 0x7f) s[n++] = (char)serial_desc[i];
+	}
+	s[n] = 0;
+	log_printf("host: device %u serial %s\n", xfer->daddr, n ? s : "unreadable");
+	gadget_watch(s);
+}
+
+static void serial_fetch(uint8_t daddr)
+{
+	memset(serial_desc, 0, sizeof serial_desc);
+	if (!tuh_descriptor_get_serial_string(daddr, 0x0409, serial_desc, sizeof serial_desc, serial_done, 0)) {
+		log_printf("host: device %u has no serial string\n", daddr);
+		gadget_watch(NULL);
+	}
+}
+
 void tuh_mount_cb(uint8_t daddr)
 {
 	uint16_t vid = 0, pid = 0;
@@ -129,6 +157,8 @@ void tuh_mount_cb(uint8_t daddr)
 		reenum_at = time_ms() + 200;
 		log_printf("host: not high speed, re-resetting the port (try %u)\n", hs_retries);
 	}
+	if (!reenum_pending && host_bridged())
+		serial_fetch(daddr);
 }
 
 void tuh_umount_cb(uint8_t daddr)
@@ -205,6 +235,7 @@ static const char *host_link_speed(void)
 }
 
 uint8_t host_daddr(void) { return cur_daddr; }
+bool host_bridged(void) { return slots[0].bound || slots[1].bound; }
 
 /* ---- console test transfer ------------------------------------------- */
 CFG_TUH_MEM_SECTION CFG_TUH_MEM_ALIGN static uint8_t test_buf[4096];
