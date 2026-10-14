@@ -50,6 +50,7 @@ struct slot {
 	uint8_t g_in, g_out;		/* gadget endpoints */
 	uint8_t daddr, w_in, w_out;	/* watch */
 	uint16_t w_in_mps;		/* watch IN wMaxPacketSize */
+	bool reply_due;			/* fastboot: a command went out, its reply is not complete */
 	struct dir h2w;			/* host (gadget OUT) -> watch (OUT) */
 	struct dir w2h;			/* watch (IN) -> host (gadget IN) */
 };
@@ -509,6 +510,8 @@ static void w_out_cb(tuh_xfer_t *x)
 	bridge_watch_out_done((int)x->user_data, x->actual_len, x->result);
 }
 
+static void w2h_fill(struct slot *s);
+
 void bridge_watch_out_done(int sl, uint32_t len, int result)
 {
 	struct slot *s = &slots[sl & 1];
@@ -522,6 +525,7 @@ void bridge_watch_out_done(int sl, uint32_t len, int result)
 	if (result != XFER_RESULT_SUCCESS)
 		log_printf("bridge: slot %d watch OUT result %d (%lu)\n", sl, result, (unsigned long)len);
 	if (s == &slots[0]) cyc_drain_done(true, d, i, now);
+	else if (result == XFER_RESULT_SUCCESS) { s->reply_due = true; w2h_fill(s); }
 	if (!partial && d->zlp[i]) {
 		/* the data is out, its zero-length packet next (oldest_full: it keeps its seq) */
 		d->zlp[i] = false; d->off[i] = d->len[i] = 0;
@@ -557,6 +561,9 @@ static void w2h_fill(struct slot *s)
 {
 	struct dir *d = &s->w2h;
 	if (!s->bound || d->filling >= 0) return;
+	/* fastboot: the bootloader only answers commands, and a continuous
+	 * IN poll while it has nothing to send makes it drop off high speed */
+	if (s != &slots[0] && !s->reply_due) return;
 	int i = any_empty(d);
 	if (i < 0) return;
 	uint32_t want = BRIDGE_BUF;
@@ -713,6 +720,10 @@ void bridge_watch_in_done(int sl, uint32_t len, int result)
 			d->pending_payload = 0;
 		}
 	}
+	/* fastboot: OKAY, FAIL and DATA end a reply; INFO and TEXT do not */
+	if (s != &slots[0] && len >= 4 && (!memcmp(d->buf[i], "OKAY", 4) || !memcmp(d->buf[i], "FAIL", 4) ||
+					   !memcmp(d->buf[i], "DATA", 4)))
+		s->reply_due = false;
 	if (len < d->fwd) d->fwd = len;			/* cannot happen; keep off <= len */
 	i = dir_fill_complete(d, len);
 	d->hdr[i] = hdr;
@@ -874,6 +885,7 @@ void bridge_bind(int sl, uint8_t daddr, uint8_t ep_in, uint8_t ep_out, uint16_t 
 {
 	struct slot *s = &slots[sl & 1];
 	s->daddr = daddr; s->w_in = ep_in; s->w_out = ep_out; s->bound = true;
+	s->reply_due = false;
 	s->w_in_mps = in_mps ? in_mps : 512;
 	s->w2h.pending_payload = 0;
 	s->w2h.errs = 0; s->w2h.retry = false;
