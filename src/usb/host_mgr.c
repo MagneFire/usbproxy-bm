@@ -130,10 +130,25 @@ static void serial_done(tuh_xfer_t *xfer)
 	gadget_watch(s);
 }
 
+/* Read the serial in the watch's first language, as enumeration does;
+ * English when string 0 can't be read. */
+static void serial_langid_done(tuh_xfer_t *xfer)
+{
+	if (xfer->daddr != cur_daddr) return;
+	uint16_t langid = 0x0409;
+	if (xfer->result == XFER_RESULT_SUCCESS && xfer->actual_len >= 4 && (serial_desc[0] & 0xff) >= 4)
+		langid = serial_desc[1];
+	memset(serial_desc, 0, sizeof serial_desc);
+	if (!tuh_descriptor_get_serial_string(xfer->daddr, langid, serial_desc, sizeof serial_desc, serial_done, 0)) {
+		log_printf("host: device %u has no serial string\n", xfer->daddr);
+		gadget_watch(NULL);
+	}
+}
+
 static void serial_fetch(uint8_t daddr)
 {
 	memset(serial_desc, 0, sizeof serial_desc);
-	if (!tuh_descriptor_get_serial_string(daddr, 0x0409, serial_desc, sizeof serial_desc, serial_done, 0)) {
+	if (!tuh_descriptor_get_string_langid(daddr, serial_desc, 4, serial_langid_done, 0)) {
 		log_printf("host: device %u has no serial string\n", daddr);
 		gadget_watch(NULL);
 	}
