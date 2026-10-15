@@ -473,6 +473,23 @@ static void h2w_drain_partial(struct slot *s)
 		d->fwd = off;
 }
 
+/* fastboot: the host sends only once it has read the whole reply, so reply
+ * bytes still on their way to it belong to a client that gave up. The one
+ * handed to the gadget is aborted without a halt, keeping the toggle. */
+static void fb_drop_stale(struct slot *s)
+{
+	struct dir *d = &s->w2h;
+	int n = 0;
+	if (d->draining >= 0 && !d->partial && usbd_edpt_abort_xfer(0, s->g_in)) {
+		d->state[d->draining] = B_EMPTY;
+		d->draining = -1;
+		n++;
+	}
+	for (int k = 0; k < BRIDGE_NBUF; k++)
+		if (d->state[k] == B_FULL) { d->state[k] = B_EMPTY; n++; }
+	if (n) log_printf("bridge: slot 1 dropped %d reply packet(s) no client read\n", n);
+}
+
 void bridge_gadget_out_done(int sl, uint32_t len)
 {
 	struct slot *s = &slots[sl & 1];
@@ -480,6 +497,7 @@ void bridge_gadget_out_done(int sl, uint32_t len)
 	int i = d->filling;
 	if (i < 0) return;
 	d->msgs++; d->bytes += len;
+	if (s != &slots[0]) fb_drop_stale(s);
 	if (!len) {
 		/* adb's libusb layer terminates every payload that is a multiple of
 		 * 512 with a zero-length packet; adbd reads exact lengths and never
