@@ -125,6 +125,8 @@ static void cmd_status(void)
 			(unsigned long)st->in_pkts, (unsigned long)st->in_bytes);
 		con_out(buf);
 	}
+	hcd_h3_status_line(buf, sizeof buf);
+	con_out(buf);
 	host_status_line(buf, sizeof buf);
 	con_out(buf);
 	host_cycle_status(buf, sizeof buf);
@@ -237,9 +239,9 @@ static void run(char *s)
 	} else if (!strcmp(c, "zero")) {
 		bridge_stats_reset();
 	} else if (!strcmp(c, "hangusb")) {
-		/* halt the EHCI: FRINDEX stops, the progress gate must reset the board */
-		clrbits(EHCI1_USBCMD, 1u);
-		con_out("ehci halted; expect a watchdog reset in ~10 s\n");
+		/* halt the owning controller: its frames stop, the progress gate must reset the board */
+		hcd_h3_halt_owner();
+		con_out("host controller halted; expect a watchdog reset in ~10 s\n");
 	} else if (!strcmp(c, "hostcycle")) {
 		host_cycle_start(argc > 1 ? (unsigned)strtoul(argv[1], 0, 0) : 1);
 	} else if (!strcmp(c, "cutlag")) {

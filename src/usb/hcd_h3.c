@@ -28,7 +28,9 @@
 #define EHCI_PORTSC     (EHCI_OP + 0x44)
 
 #define PORTSC_CCS      BIT(0)
+#define PORTSC_CSC      BIT(1)
 #define PORTSC_PE       BIT(2)
+#define PORTSC_PR       BIT(8)
 #define PORTSC_LS_K     (1u << 10)
 #define PORTSC_LS_MASK  (3u << 10)
 #define PORTSC_OWNER    BIT(13)
@@ -44,7 +46,12 @@ static enum hcd_h3_ctrl owner;
 /* the controller a device address was enumerated on (ep0 opened), so a
  * device's transfers and close keep their controller */
 static uint8_t dev_ctrl[8];
-static uint32_t events_dropped;
+static uint32_t events_dropped, handovers, reclaims;
+/* The HC handed the port over on its own (a reset that did not reach high
+ * speed): the OHCI takes it once usbh has given up on the EHCI side.
+ * give_back: the OHCI's device left; the port idles with the EHCI. */
+static bool handover_pending, give_back;
+static uint32_t handover_at;
 
 static enum hcd_h3_ctrl ctrl_of(uint8_t daddr)
 {
@@ -100,11 +107,98 @@ static void port_changed(enum hcd_h3_ctrl from, bool connected, bool in_isr)
 	if (connected) hcd_event_device_attach(1, in_isr);
 	else hcd_event_device_remove(1, in_isr);
 }
-void ehci_h3_port_changed(bool connected, bool in_isr) { port_changed(HCD_H3_EHCI, connected, in_isr); }
-void ohci_h3_port_changed(bool connected, bool in_isr) { port_changed(HCD_H3_OHCI, connected, in_isr); }
+
+void ehci_h3_port_changed(bool connected, bool in_isr)
+{
+	if (!connected && ehci_h3_port_handed_over && owner == HCD_H3_EHCI) {
+		ehci_h3_port_handed_over = 0;
+		handover_pending = true;
+		handover_at = time_ms();
+	}
+	port_changed(HCD_H3_EHCI, connected, in_isr);
+}
+
+void ohci_h3_port_changed(bool connected, bool in_isr)
+{
+	port_changed(HCD_H3_OHCI, connected, in_isr);
+	if (!connected && owner == HCD_H3_OHCI)
+		give_back = true;
+}
+
+/* ---- moving the port -------------------------------------------------- */
+/* To the OHCI. The EHCI's disconnect that follows is dropped (it is no
+ * longer the owner) and the OHCI's connect is acknowledged here, so usbh
+ * sees neither; the caller posts what usbh should see. */
+static bool hand_over(void)
+{
+	gic_mask(IRQ_EHCI1);
+	gic_mask(IRQ_OHCI1);
+	owner = HCD_H3_OHCI;
+	writel((readl(EHCI_PORTSC) & ~PORTSC_W1C) | PORTSC_OWNER, EHCI_PORTSC);
+	bool seen = false;
+	for (int i = 0; i < 10000; i++) {
+		if (ohci_h3_rhport_status() & RH_CCS) { seen = true; break; }
+		delay_us(1);
+	}
+	ohci_h3_rhport_write(RH_CSC);
+	writel((readl(EHCI_PORTSC) & ~PORTSC_W1C) | PORTSC_CSC, EHCI_PORTSC);
+	ehci_h3_port_handed_over = 0;
+	handovers++;
+	gic_unmask(IRQ_OHCI1);
+	gic_unmask(IRQ_EHCI1);
+	return seen;
+}
+
+/* Back to the EHCI, which then reports the device (if any) as a fresh
+ * connect; usbh is told here rather than from the interrupt. */
+static void take_back(void)
+{
+	gic_mask(IRQ_EHCI1);
+	owner = HCD_H3_EHCI;
+	writel(readl(EHCI_PORTSC) & ~(PORTSC_W1C | PORTSC_OWNER), EHCI_PORTSC);
+	for (int i = 0; i < 10000 && !(readl(EHCI_PORTSC) & PORTSC_CSC); i++)
+		delay_us(1);
+	uint32_t v = readl(EHCI_PORTSC);
+	writel((v & ~PORTSC_W1C) | PORTSC_CSC, EHCI_PORTSC);
+	if (v & PORTSC_CCS)
+		hcd_event_device_attach(1, false);
+	gic_unmask(IRQ_EHCI1);
+}
+
+/* The host manager's chirp retry: the device goes away for usbh and the
+ * EHCI gets the port and the device back, to reset it again. */
+void hcd_h3_reclaim(void)
+{
+	reclaims++;
+	hcd_event_device_remove(1, false);
+	take_back();
+}
 
 void hcd_h3_poll(void)
 {
+	if (handover_pending && time_ms() - handover_at >= 100) {
+		/* usbh has given up on the EHCI side: the device is the OHCI's now
+		 * (moved here when the HC handed it over by itself, or already in
+		 * hcd_port_reset_end) and usbh gets it as a fresh attach */
+		handover_pending = false;
+		gic_mask(IRQ_OHCI1);
+		if (owner == HCD_H3_EHCI) {
+			owner = HCD_H3_OHCI;
+			handovers++;
+			log_printf("host: not high speed; port handed to OHCI1 (%lu)\n", (unsigned long)handovers);
+		}
+		if (ohci_h3_rhport_status() & RH_CCS) {
+			ohci_h3_rhport_write(RH_CSC);
+			hcd_event_device_attach(1, false);
+		} else {
+			give_back = true;
+		}
+		gic_unmask(IRQ_OHCI1);
+	}
+	if (give_back) {
+		give_back = false;
+		take_back();
+	}
 	if (owner != HCD_H3_EHCI) return;
 	gic_mask(IRQ_EHCI1);
 	ehci_h3_poll_async(1);
@@ -173,17 +267,49 @@ uint32_t hcd_frame_number(uint8_t rhport)
 }
 bool hcd_port_connect_status(uint8_t rhport)
 {
+	if (handover_pending) return false;	/* the EHCI's enumeration ends here */
 	return owner == HCD_H3_EHCI ? ehci_h3_port_connect_status(rhport) : ohci_h3_port_connect_status(rhport);
 }
+
+/* usbh's reset after the attach debounce. A low-speed device (K line state)
+ * is the OHCI's before any reset: the port moves and the same enumeration
+ * goes on there. A full-speed device is found out by the reset itself: the
+ * HC hands the port over when it ends without high speed, see
+ * ehci_h3_port_changed. */
 void hcd_port_reset(uint8_t rhport)
 {
-	if (owner == HCD_H3_EHCI) ehci_h3_port_reset(rhport);
-	else ohci_h3_port_reset(rhport);
+	if (owner == HCD_H3_EHCI) {
+		uint32_t v = readl(EHCI_PORTSC);
+		if ((v & PORTSC_CCS) && !(v & PORTSC_PE) && (v & PORTSC_LS_MASK) == PORTSC_LS_K) {
+			bool seen = hand_over();
+			log_printf("host: low-speed device; port handed to OHCI1 (%lu)%s\n",
+				   (unsigned long)handovers, seen ? "" : ", not seen there");
+			ohci_h3_port_reset(rhport);
+			return;
+		}
+		ehci_h3_port_reset(rhport);
+	} else {
+		ohci_h3_port_reset(rhport);
+	}
 }
+/* The end of usbh's reset. The EHCI then enables the port only for a
+ * high-speed device; a device still attached to a disabled port is full
+ * speed and goes to the OHCI, where usbh starts over (handover_pending:
+ * this enumeration sees no device). */
 void hcd_port_reset_end(uint8_t rhport)
 {
-	if (owner == HCD_H3_EHCI) ehci_h3_port_reset_end(rhport);
-	else ohci_h3_port_reset_end(rhport);
+	if (owner != HCD_H3_EHCI) { ohci_h3_port_reset_end(rhport); return; }
+	ehci_h3_port_reset_end(rhport);
+	for (int i = 0; i < 3000 && (readl(EHCI_PORTSC) & PORTSC_PR); i++)
+		delay_us(1);
+	uint32_t v = readl(EHCI_PORTSC);
+	if ((v & PORTSC_CCS) && !(v & PORTSC_PE) && !(v & PORTSC_OWNER)) {
+		bool seen = hand_over();
+		handover_pending = true;
+		handover_at = time_ms();
+		log_printf("host: full-speed device; port handed to OHCI1 (%lu)%s\n",
+			   (unsigned long)handovers, seen ? "" : ", not seen there");
+	}
 }
 tusb_speed_t hcd_port_speed_get(uint8_t rhport)
 {
@@ -228,7 +354,13 @@ bool hcd_edpt_clear_stall(uint8_t rhport, uint8_t daddr, uint8_t ep_addr)
 
 /* ---- what the firmware reads ------------------------------------------ */
 enum hcd_h3_ctrl hcd_h3_owner(void) { return owner; }
-uint32_t hcd_h3_events_dropped(void) { return events_dropped; }
+
+void hcd_h3_status_line(char *buf, unsigned n)
+{
+	snprintf(buf, n, "host_owner=%s\nhost_handovers=%lu\nhost_reclaims=%lu\nhost_events_dropped=%lu\n",
+		 owner == HCD_H3_EHCI ? "ehci" : "ohci", (unsigned long)handovers, (unsigned long)reclaims,
+		 (unsigned long)events_dropped);
+}
 
 void hcd_h3_port_status(struct hcd_h3_port *p)
 {

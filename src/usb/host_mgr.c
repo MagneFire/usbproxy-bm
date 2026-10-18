@@ -3,24 +3,24 @@
 #include "tusb.h"
 #include "host/usbh_pvt.h"
 #include "host/hcd.h"
-#include "ehci_h3.h"
 #include "hcd_h3.h"
 #include "host_mgr.h"
 #include "bridge/bridge.h"
 #include "bridge/adb_proto.h"
 
-#define PORTSC_W1C      (BIT(1) | BIT(3) | BIT(5))
-#define PORTSC_CCS      BIT(0)
-#define PORTSC_PE       BIT(2)
-#define PORTSC_LS_MASK  (3u << 10)
-#define PORTSC_OWNER    BIT(13)
+/* A watch whose high-speed chirp was missed (cold boot) enumerates at full
+ * speed on the OHCI; the port goes back to the EHCI for another reset this
+ * many times before full speed is accepted. */
+#define HS_RETRIES      8
 
 struct hslot { uint8_t daddr, ep_in, ep_out; uint16_t in_mps; bool bound, bridged; uint32_t in_pkts, out_pkts; };
 static struct hslot slots[2];
 static uint8_t cur_daddr;
-static uint32_t reclaim_at, reenum_at;
-static unsigned reclaims, hs_retries, port_reenables;
-static bool reenum_pending;
+static uint32_t reenum_at;
+static unsigned hs_retries, port_reenables;
+static bool reenum_pending, reclaim_pending;
+/* the device being enumerated has the watch's bridge interfaces */
+static bool enum_watch;
 /* software attach/detach cycles (console `hostcycle N`): unmount + re-enumerate */
 static unsigned cycles_left, cycle_mounts, cycle_fail;
 static uint32_t cycle_next_at, mounts;
@@ -29,10 +29,20 @@ static uint32_t cycle_next_at, mounts;
 static bool drv_init(void) { memset(slots, 0, sizeof slots); return true; }
 static bool drv_deinit(void) { return true; }
 
+static bool watch_interface(const tusb_desc_interface_t *itf)
+{
+	return itf->bInterfaceClass == 0xff && itf->bInterfaceSubClass == 0x42 &&
+	       (itf->bInterfaceProtocol == 0x01 || itf->bInterfaceProtocol == 0x03);
+}
+
 static uint16_t drv_open(uint8_t rhport, uint8_t daddr, tusb_desc_interface_t const *itf, uint16_t max_len)
 {
 	(void)rhport;
-	if (itf->bInterfaceClass != 0xff || itf->bInterfaceSubClass != 0x42 || itf->bNumEndpoints != 2)
+	if (!watch_interface(itf) || itf->bNumEndpoints != 2)
+		return 0;
+	/* a retry pass: the device is about to be reset again, so the bridge
+	 * stays out of it (no bind, no halt pulse on the unbind) */
+	if (tuh_speed_get(daddr) != TUSB_SPEED_HIGH && hs_retries < HS_RETRIES)
 		return 0;
 	int idx = itf->bInterfaceProtocol == 0x01 ? 0 : itf->bInterfaceProtocol == 0x03 ? 1 : -1;
 	if (idx < 0)
@@ -111,6 +121,22 @@ void tuh_enum_descriptor_device_cb(uint8_t daddr, const tusb_desc_device_t *d)
 	log_printf("host: device %u descriptor %04x:%04x ep0 %u\n", daddr, d->idVendor, d->idProduct, d->bMaxPacketSize0);
 }
 
+/* The configuration, before the class drivers see its interfaces: is this
+ * a watch? */
+bool tuh_enum_descriptor_configuration_cb(uint8_t daddr, uint8_t idx, const tusb_desc_configuration_t *cfg)
+{
+	(void)daddr; (void)idx;
+	const uint8_t *p = (const uint8_t *)cfg;
+	unsigned total = cfg->wTotalLength < CFG_TUH_ENUMERATION_BUFSIZE ? cfg->wTotalLength : CFG_TUH_ENUMERATION_BUFSIZE;
+	const uint8_t *end = p + total;
+	enum_watch = false;
+	for (p += cfg->bLength; p + 2 <= end && p[0] >= 2 && p + p[0] <= end; p += p[0])
+		if (p[1] == TUSB_DESC_INTERFACE && p[0] >= sizeof(tusb_desc_interface_t) &&
+		    watch_interface((const tusb_desc_interface_t *)p))
+			enum_watch = true;
+	return true;
+}
+
 /* The watch's serial for the gadget (main.c gadget_watch): printable ASCII
  * of the string descriptor, at most 30 characters (the gadget's limit). */
 CFG_TUH_MEM_SECTION CFG_TUH_MEM_ALIGN static uint16_t serial_desc[32];
@@ -165,14 +191,14 @@ void tuh_mount_cb(uint8_t daddr)
 		   sp == TUSB_SPEED_HIGH ? "high speed" : sp == TUSB_SPEED_FULL ? "FULL speed" : "low speed");
 	if (sp == TUSB_SPEED_HIGH) {
 		hs_retries = 0;		/* the tries are per attach */
-	} else if (hs_retries < 8) {
-		/* The chirp can be missed on a cold boot: reset again. */
+	} else if (enum_watch && hs_retries < HS_RETRIES) {
+		/* The chirp can be missed on a cold boot: the EHCI resets again. */
 		hs_retries++;
-		reenum_pending = true;
+		reclaim_pending = true;
 		reenum_at = time_ms() + 200;
-		log_printf("host: not high speed, re-resetting the port (try %u)\n", hs_retries);
+		log_printf("host: watch not at high speed; back to the EHCI for another reset (try %u)\n", hs_retries);
 	}
-	if (!reenum_pending && host_bridged())
+	if (!reclaim_pending && host_bridged())
 		serial_fetch(daddr);
 }
 
@@ -184,44 +210,42 @@ void tuh_umount_cb(uint8_t daddr)
 }
 
 /* ---- port policy ------------------------------------------------------ */
-static uint32_t last_portsc_cc, port_changes;
+static uint32_t last_port_cc, port_changes;
 
 void host_mgr_poll(void)
 {
 	uint32_t now = time_ms();
 	/* Port state log: every connect/enable transition with a stamp, so a
-	 * soak tells a cradle drop (CCS falls with no traffic) from a firmware
-	 * fault. CCS | PE<<1 of PORTSC. */
+	 * soak tells a cradle drop (connected falls with no traffic) from a
+	 * firmware fault. connected | enabled<<1 | owner<<2. */
 	{
-		uint32_t p = hcd_h3_portsc();
-		uint32_t cc = (p & PORTSC_CCS ? 1u : 0u) | (p & PORTSC_PE ? 2u : 0u);
-		if (cc != last_portsc_cc) {
+		struct hcd_h3_port p;
+		hcd_h3_port_status(&p);
+		uint32_t cc = (p.connected ? 1u : 0u) | (p.enabled ? 2u : 0u) | (p.owner == HCD_H3_OHCI ? 4u : 0u);
+		if (cc != last_port_cc) {
 			if (port_changes++)	/* not the first sample */
-				log_printf("port: %s%s portsc=%08lx\n", (cc & 1) ? "connected" : "DISCONNECTED",
-					   (cc & 2) ? ", enabled" : "", (unsigned long)p);
-			last_portsc_cc = cc;
+				log_printf("port: %s%s on %s\n", p.connected ? "connected" : "DISCONNECTED",
+					   p.enabled ? ", enabled" : "", p.owner == HCD_H3_OHCI ? "ohci" : "ehci");
 			/* The HC disabled the port under a mounted device that is
 			 * still attached (it fell back to full speed, or a bus
 			 * fault): no connect change follows, so re-enumerate, as
 			 * Linux's hub driver does ("re-enabling"). */
-			if (cc == 1 && cur_daddr && !reenum_pending) {
+			if ((cc & 3) == 1 && (last_port_cc & 3) == 3 && cur_daddr && !reenum_pending && !reclaim_pending) {
 				port_reenables++;
 				reenum_pending = true;
 				reenum_at = now + 10;
 				log_printf("host: port disabled under device %u; re-enumerating (%u)\n", cur_daddr, port_reenables);
 			}
+			last_port_cc = cc;
 		}
 	}
-	if (ehci_h3_port_handed_over) {
-		if (!reclaim_at)
-			reclaim_at = now + 1000;
-		if ((int32_t)(now - reclaim_at) >= 0) {
-			uint32_t v = hcd_h3_portsc() & ~PORTSC_W1C;
-			hcd_h3_portsc_write(v & ~PORTSC_OWNER);
-			ehci_h3_port_handed_over = 0;
-			reclaim_at = 0;
-			reclaims++;
-			log_printf("host: port taken back from the companion (%u)\n", reclaims);
+	if (reclaim_pending && (int32_t)(now - reenum_at) >= 0) {
+		reclaim_pending = false;
+		if (hcd_h3_owner() == HCD_H3_OHCI) {
+			hcd_h3_reclaim();
+		} else {
+			hcd_event_device_remove(1, false);
+			hcd_event_device_attach(1, false);
 		}
 	}
 	if (reenum_pending && (int32_t)(now - reenum_at) >= 0) {
@@ -229,7 +253,7 @@ void host_mgr_poll(void)
 		hcd_event_device_remove(1, false);
 		hcd_event_device_attach(1, false);
 	}
-	if (cycles_left && !reenum_pending && (int32_t)(now - cycle_next_at) >= 0) {
+	if (cycles_left && !reenum_pending && !reclaim_pending && (int32_t)(now - cycle_next_at) >= 0) {
 		if (cur_daddr) cycle_mounts++; else cycle_fail++;
 		cycles_left--;
 		cycle_next_at = now + 1500;
@@ -252,10 +276,11 @@ void host_cycle_status(char *buf, unsigned n)
 /* "480", "12", "1.5", "none" */
 static const char *host_link_speed(void)
 {
-	uint32_t p = hcd_h3_portsc();
-	if (!(p & PORTSC_CCS)) return "none";
-	if (p & PORTSC_PE) return "480";
-	if ((p & PORTSC_LS_MASK) == (1u << 10)) return "1.5";
+	struct hcd_h3_port p;
+	hcd_h3_port_status(&p);
+	if (!p.connected) return "none";
+	if (p.low_speed) return "1.5";
+	if (p.owner == HCD_H3_EHCI && p.enabled) return "480";
 	return "12";
 }
 
@@ -352,10 +377,10 @@ int host_test_xfer(int slot, bool in, uint32_t len)
 
 void host_status_line(char *buf, unsigned n)
 {
-	snprintf(buf, n, "host_link=%s\nhost_daddr=%u\nhost_portsc=%08lx\nhost_reclaims=%u\nhost_hs_retries=%u\nhost_reenables=%u\n"
+	snprintf(buf, n, "host_link=%s\nhost_daddr=%u\nhost_portsc=%08lx\nhost_hs_retries=%u\nhost_reenables=%u\n"
 		 "hslot0=bound:%d daddr:%u in:%02x out:%02x pkts %lu/%lu\n"
 		 "hslot1=bound:%d daddr:%u in:%02x out:%02x pkts %lu/%lu\n",
-		 host_link_speed(), cur_daddr, (unsigned long)hcd_h3_portsc(), reclaims, hs_retries, port_reenables,
+		 host_link_speed(), cur_daddr, (unsigned long)hcd_h3_portsc(), hs_retries, port_reenables,
 		 slots[0].bound, slots[0].daddr, slots[0].ep_in, slots[0].ep_out, (unsigned long)slots[0].in_pkts, (unsigned long)slots[0].out_pkts,
 		 slots[1].bound, slots[1].daddr, slots[1].ep_in, slots[1].ep_out, (unsigned long)slots[1].in_pkts, (unsigned long)slots[1].out_pkts);
 }

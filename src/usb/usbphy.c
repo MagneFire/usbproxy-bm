@@ -81,12 +81,13 @@ void usbphy1_init(void)
 	phy_tune(1);
 }
 
-/* Power measurement: stop EHCI1, gate EHCI1/OHCI1 and PHY1, SIDDQ on. Only
- * meaningful with nothing bound (the progress gate would otherwise reset the
- * board); a reboot brings the host side back. */
+/* Power measurement: stop EHCI1 and OHCI1, gate them and PHY1, SIDDQ on.
+ * Only meaningful with nothing bound (the progress gate would otherwise
+ * reset the board); a reboot brings the host side back. */
 void usbphy1_off(void)
 {
 	clrbits(H3_EHCI1 + 0x10, BIT(0));            /* USBCMD.RS */
+	clrbits(H3_OHCI1 + 0x04, 0xc0);              /* HcControl.HCFS = reset */
 	delay_ms(2);
 	setbits(PMU1_BASE + PMU_PHYCTL, SIDDQ);
 	clrbits(CCU_BUS_GATE0, BIT(25) | BIT(29));

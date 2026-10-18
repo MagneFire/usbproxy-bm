@@ -11,11 +11,11 @@
 uint32_t g_entry_ms;
 int g_up;
 
-/* Progress-gated watchdog: once a watch is bound, the EHCI's frame counter
- * (FRINDEX) must keep moving; if it is stuck for 2 s the main loop stops
- * feeding the watchdog and the board resets 8 s later with a fault record.
- * The musb's FRNUM only drives the gadget bus log below. Console `hangusb`
- * halts the EHCI to prove it. */
+/* Progress-gated watchdog: once a device is bound, the frame counter of the
+ * host controller that owns the port must keep moving; if it is stuck for
+ * 2 s the main loop stops feeding the watchdog and the board resets 8 s
+ * later with a fault record. The musb's FRNUM only drives the gadget bus
+ * log below. Console `hangusb` halts the controller to prove it. */
 #define USBC_FRNUM      (H3_MUSB + 0x54)
 bool g_wdt_withheld;		/* the gate stopped feeding: nothing else may */
 static bool usb_progress_ok(void)
@@ -27,28 +27,28 @@ static bool usb_progress_ok(void)
 	if ((int32_t)(now - last_check) < 250) return true;
 	last_check = now;
 	bool bound = host_daddr() != 0;
-	uint32_t fr = readl(USBC_FRNUM) & 0x7ff, fi = readl(EHCI1_FRINDEX);
+	uint32_t fr = readl(USBC_FRNUM) & 0x7ff, fi = hcd_h3_frame_counter();
 	bool sofs = !tud_mounted() || tud_suspended() || fr != last_frnum;
-	bool ehci_ok = fi != last_frindex;
+	bool host_ok = fi != last_frindex;
 	last_frnum = fr; last_frindex = fi;
 	/* No SOFs from the Mac is not a fault: when the Mac sleeps the musb
 	 * reports SUSPEND and, 2 ms later, a RESUME that never brings SOFs, so
 	 * tud_suspended() is false while the bus sits idle. Resetting the board
 	 * there wakes the Mac over USB and the two then loop. The gadget bus
-	 * state is logged on change and only the EHCI (our own host controller)
-	 * can fail the gate. */
+	 * state is logged on change and only our own host controller can fail
+	 * the gate. */
 	static bool sofs_idle;
 	if (sofs == sofs_idle) {
 		sofs_idle = !sofs;
 		log_printf("usb: gadget bus %s\n", sofs_idle ? "idle (no SOFs; host asleep or gone)" : "active again");
 	}
-	if (!bound || ehci_ok) { stuck_since = 0; return true; }
+	if (!bound || host_ok) { stuck_since = 0; return true; }
 	if (!stuck_since) stuck_since = now;
 	if ((int32_t)(now - stuck_since) < 2000) return true;
 	lost = true;
 	g_wdt_withheld = true;
-	log_printf("watchdog: usb progress lost (ehci stuck); letting the watchdog fire\n");
-	log_set_fault("ehci frame counter stuck");
+	log_printf("watchdog: usb progress lost (host controller stuck); letting the watchdog fire\n");
+	log_set_fault("host frame counter stuck");
 	return false;
 }
 
@@ -151,7 +151,9 @@ static void gadget_follow(void)
 	uint32_t now = time_ms();
 	if (held) {
 		uint32_t t = now - g_entry_ms;
-		bool empty = !(hcd_h3_portsc() & 1u);	/* PORTSC CCS */
+		struct hcd_h3_port port;
+		hcd_h3_port_status(&port);
+		bool empty = !port.connected;
 		if ((empty && t >= BOOT_HOLD_EMPTY_MS) || t >= BOOT_HOLD_MAX_MS) {
 			if (!empty) log_printf("usb: no watch serial after %lu ms; presenting the idle gadget\n", (unsigned long)t);
 			gadget_release();
@@ -220,7 +222,7 @@ int main(void)
 	log_printf("usb: gadget initialised, held until the watch side is known\n");
 	const tusb_rhport_init_t host_init = { .role = TUSB_ROLE_HOST, .speed = TUSB_SPEED_HIGH };
 	tusb_rhport_init(1, &host_init);
-	log_printf("usb: host on EHCI1 initialised\n");
+	log_printf("usb: host on EHCI1 + OHCI1 initialised\n");
 
 	console_init();
 	for (;;) {
