@@ -1,16 +1,20 @@
-/* The gadget, byte-for-byte what usb-proxy's persistent gadget presents
- * (gadget-fixed.cpp + console-acm.cpp) so the Mac treats it the same:
- * 1d6b:0104, class EF/02/01, one configuration with the CDC-ACM console on
- * interfaces 0/1 (ep3in notify, ep4 data), the adb bridge interface 2
- * (ff/42/01, ep1) and the fastboot bridge interface 3 (ff/42/03, ep2).
- * Endpoint numbers match the appliance's map: adb 0x81/0x01, fastboot
- * 0x82/0x02, console 0x83/0x84/0x04. Two shapes: the full gadget carries the
- * watch's serial, the idle one is the console alone with GADGET_SERIAL
- * (Makefile), which differs from the appliance's USBPROXY01 so both can be
- * on the same Mac. main.c picks the shape. */
+/* The gadget. The watch shape is byte-for-byte what usb-proxy's persistent
+ * gadget presents (gadget-fixed.cpp + console-acm.cpp) so the Mac treats it
+ * the same: 1d6b:0104, class EF/02/01, one configuration with the CDC-ACM
+ * console on interfaces 0/1 (ep3in notify, ep4 data), the adb bridge
+ * interface 2 (ff/42/01, ep1) and the fastboot bridge interface 3
+ * (ff/42/03, ep2). Endpoint numbers match the appliance's map: adb
+ * 0x81/0x01, fastboot 0x82/0x02, console 0x83/0x84/0x04. The watch shape
+ * carries the watch's serial; the idle shape is the console alone with
+ * GADGET_SERIAL (Makefile), which differs from the appliance's USBPROXY01
+ * so both can be on the same Mac. The mirror shape is another device's
+ * descriptors (mirror_gadget.c), without the console. main.c picks the
+ * shape. */
 #include <string.h>
 #include "fw.h"
 #include "tusb.h"
+#include "dcd_h3.h"
+#include "mirror.h"
 
 #ifndef GADGET_SERIAL
 #define GADGET_SERIAL "USBPROXYBM"
@@ -43,7 +47,6 @@ static const tusb_desc_device_t desc_device = {
 	.bNumConfigurations = 1,
 };
 
-uint8_t const *tud_descriptor_device_cb(void) { return (uint8_t const *)&desc_device; }
 
 /* vendor bridge interface: 9 + 7 + 7 */
 #define BRIDGE_DESC_LEN 23
@@ -79,23 +82,40 @@ static const uint8_t desc_idle_fs[] = {
 	TUD_CDC_DESCRIPTOR(ITF_ACM_COMM, 0, EP_ACM_NOTIFY, 10, EP_ACM_OUT, EP_ACM_IN, 64),
 };
 
-static bool full;
+static enum gadget_shape shape;
 static char serial[31] = GADGET_SERIAL;
 
-void gadget_set(bool bridge, const char *s)
+uint8_t const *tud_descriptor_device_cb(void)
 {
-	full = bridge;
-	if (!s || !*s) s = GADGET_SERIAL;
-	size_t n = 0;
-	while (n < sizeof serial - 1 && s[n]) { serial[n] = s[n]; n++; }
-	serial[n] = 0;
+	if (shape == GADGET_MIRROR) return mirror_gadget_device();
+	return (uint8_t const *)&desc_device;
 }
 
-bool gadget_full(void) { return full; }
+/* The DCD follows the shape: the mirror of a full or low-speed device is a
+ * full-speed gadget, and a mirror's endpoints are placed in FIFO RAM as
+ * they come; the watch and idle shapes keep the tuned static map. */
+void gadget_set_shape(enum gadget_shape s, const char *ser)
+{
+	shape = s;
+	if (!ser || !*ser) ser = GADGET_SERIAL;
+	size_t n = 0;
+	while (n < sizeof serial - 1 && ser[n]) { serial[n] = ser[n]; n++; }
+	serial[n] = 0;
+	dcd_h3_fifo_mode(s == GADGET_MIRROR);
+	dcd_h3_set_high_speed(s != GADGET_MIRROR || mirror_gadget_high_speed());
+}
+
+enum gadget_shape gadget_shape(void) { return shape; }
+bool gadget_full(void) { return shape == GADGET_WATCH; }
+const char *gadget_shape_name(void)
+{
+	return shape == GADGET_WATCH ? "watch" : shape == GADGET_MIRROR ? "mirror" : "idle";
+}
 
 static const uint8_t *config_for(bool high)
 {
-	if (full) return high ? desc_config_hs : desc_config_fs;
+	if (shape == GADGET_MIRROR) return mirror_gadget_config(high);
+	if (shape == GADGET_WATCH) return high ? desc_config_hs : desc_config_fs;
 	return high ? desc_idle_hs : desc_idle_fs;
 }
 
@@ -111,16 +131,21 @@ static const tusb_desc_device_qualifier_t desc_qualifier = {
 	.bReserved = 0,
 };
 
-uint8_t const *tud_descriptor_device_qualifier_cb(void) { return (uint8_t const *)&desc_qualifier; }
+uint8_t const *tud_descriptor_device_qualifier_cb(void)
+{
+	if (shape == GADGET_MIRROR) return mirror_gadget_qualifier();	/* NULL for a full-speed mirror */
+	return (uint8_t const *)&desc_qualifier;
+}
 
 static uint8_t desc_other_speed[CONFIG_TOTAL_LEN];
 
 uint8_t const *tud_descriptor_other_speed_configuration_cb(uint8_t index)
 {
 	(void)index;
+	if (shape == GADGET_MIRROR) return mirror_gadget_other_speed();
 	/* The other speed's config, with the OTHER_SPEED_CONFIG type byte. */
 	const uint8_t *src = config_for(tud_speed_get() != TUSB_SPEED_HIGH);
-	memcpy(desc_other_speed, src, full ? CONFIG_TOTAL_LEN : IDLE_TOTAL_LEN);
+	memcpy(desc_other_speed, src, shape == GADGET_WATCH ? CONFIG_TOTAL_LEN : IDLE_TOTAL_LEN);
 	desc_other_speed[1] = TUSB_DESC_OTHER_SPEED_CONFIG;
 	return desc_other_speed;
 }
@@ -138,6 +163,7 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid)
 {
 	(void)langid;
 	size_t n;
+	if (shape == GADGET_MIRROR) return mirror_gadget_string(index);	/* NULL = STALL, as the device would */
 	if (index == 0) {
 		desc_str[1] = 0x0409;
 		n = 1;

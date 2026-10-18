@@ -6,6 +6,8 @@
 #include "tusb.h"
 #include "usb/host_mgr.h"
 #include "usb/hcd_h3.h"
+#include "usb/mirror.h"
+#include "usb/mirror_pipes.h"
 #include "bridge/bridge.h"
 
 uint32_t g_entry_ms;
@@ -53,14 +55,17 @@ static bool usb_progress_ok(void)
 }
 
 /* The Mac can miss our disconnect after a quick power cycle, keep the old
- * device object and never reset the new one. If the host has not
- * configured us within 2 s of our last connect, drop the pull-up for 100 ms
- * and present the gadget again, which the host sees as a fresh attach. The
+ * device object and never reset the new one. If the host has not even
+ * addressed us within 2 s of our last connect, drop the pull-up for 100 ms
+ * and present the gadget again, which the host sees as a fresh attach.
+ * Addressed but not configured is the Mac's choice for a device without a
+ * driver (a mirrored vendor device waits for its program to open it). The
  * console's `detach` suspends this. */
 bool g_manual_detach;
 uint32_t g_represents;
 /* A full-speed configuration is re-presented: a fresh attach gets high speed
- * after a missed chirp. Full speed after FS_RETRIES is the link's own limit. */
+ * after a missed chirp. Full speed after FS_RETRIES is the link's own limit.
+ * The mirror of a full or low-speed device is full speed by design. */
 #define FS_RETRIES 3
 uint32_t g_fs_retries;
 /* Idle accounting for `status`: main-loop passes and WFIs in the last whole
@@ -94,6 +99,7 @@ static void gadget_present_check(void)
 		fs_stale = false;
 		if (tud_speed_get() == TUSB_SPEED_HIGH) { g_fs_retries = 0; return; }
 		if (!TUD_OPT_HIGH_SPEED || g_fs_retries >= FS_RETRIES) return;
+		if (gadget_shape() == GADGET_MIRROR && !mirror_gadget_high_speed()) return;
 		g_fs_retries++;
 		log_printf("usb: configured at full speed; re-presenting the gadget for high speed (try %lu)\n",
 			   (unsigned long)g_fs_retries);
@@ -101,22 +107,24 @@ static void gadget_present_check(void)
 		return;
 	}
 	fs_stale = false;
+	if (tud_connected()) { since = now; return; }	/* addressed: the host saw us */
 	if ((int32_t)(now - since) >= 2000) {
-		log_printf("usb: not configured %lu ms after connect; re-presenting the gadget (%lu)\n",
+		log_printf("usb: not addressed %lu ms after connect; re-presenting the gadget (%lu)\n",
 			   (unsigned long)(now - since), (unsigned long)g_represents + 1);
 		gadget_represent();
 		fs_stale = false;
 	}
 }
 
-/* The gadget's shape follows the watch: the full gadget with the serial of
- * the last watch seen, or the console alone once no watch has been mounted
- * for g_sticky_ms. A reboot or an adb/fastboot switch of the same watch
- * keeps the gadget (the bridge's halt pulse and CNXN replay cover it); a
+/* The gadget's shape follows the device on the port: the watch shape with
+ * the serial of the last watch seen, the mirror of any other device while
+ * it is there, or the console alone once no watch has been mounted for
+ * g_sticky_ms. A reboot or an adb/fastboot switch of the same watch keeps
+ * the gadget (the bridge's halt pulse and CNXN replay cover it); a
  * different watch re-enumerates it. At boot the gadget is held off until
- * the watch's serial is known, so the Mac sees one enumeration. */
+ * the device is known, so the Mac sees one enumeration. */
 #define BOOT_HOLD_EMPTY_MS 500	/* port still empty: present the idle gadget */
-#define BOOT_HOLD_MAX_MS   2000
+#define BOOT_HOLD_MAX_MS   3000	/* a low-speed device's strings take a while */
 uint32_t g_sticky_ms = 60000;
 static bool held = true;
 static uint32_t watch_seen_ms;
@@ -126,7 +134,11 @@ static void gadget_release(void)
 	held = false;
 	tud_connect();
 	since = time_ms();
-	log_printf("usb: gadget %s presented (%s)\n", gadget_serial(), gadget_full() ? "adb + fastboot" : "console only");
+	if (gadget_shape() == GADGET_MIRROR)
+		log_printf("usb: gadget presented (mirror of %04x:%04x, %s speed)\n", mirror_dev_desc()->idVendor,
+			   mirror_dev_desc()->idProduct, mirror_gadget_high_speed() ? "high" : "full");
+	else
+		log_printf("usb: gadget %s presented (%s)\n", gadget_serial(), gadget_full() ? "adb + fastboot" : "console only");
 }
 
 void gadget_watch(const char *serial)
@@ -134,7 +146,7 @@ void gadget_watch(const char *serial)
 	watch_seen_ms = time_ms();
 	if (!serial || !*serial) serial = NULL;
 	if (held) {
-		gadget_set(true, serial);
+		gadget_set_shape(GADGET_WATCH, serial);
 		gadget_release();
 		return;
 	}
@@ -142,8 +154,31 @@ void gadget_watch(const char *serial)
 		return;
 	log_printf("usb: watch %s; re-presenting the gadget\n", serial ? serial : "without a serial");
 	gadget_represent();
-	gadget_set(true, serial);
+	gadget_set_shape(GADGET_WATCH, serial);
 	bridge_forget_cnxn();
+}
+
+/* The mirror's device is known with its strings: present it. */
+void mirror_ready(void)
+{
+	mirror_gadget_build();
+	if (held) {
+		gadget_set_shape(GADGET_MIRROR, NULL);
+		gadget_release();
+		return;
+	}
+	log_printf("usb: mirroring %04x:%04x; re-presenting the gadget\n", mirror_dev_desc()->idVendor, mirror_dev_desc()->idProduct);
+	gadget_represent();
+	gadget_set_shape(GADGET_MIRROR, NULL);
+}
+
+/* The mirrored device left: the console comes back at once. */
+void mirror_gone(void)
+{
+	if (gadget_shape() != GADGET_MIRROR) return;
+	log_printf("usb: mirrored device gone; re-presenting the idle gadget\n");
+	gadget_represent();
+	gadget_set_shape(GADGET_IDLE, NULL);
 }
 
 static void gadget_follow(void)
@@ -155,7 +190,7 @@ static void gadget_follow(void)
 		hcd_h3_port_status(&port);
 		bool empty = !port.connected;
 		if ((empty && t >= BOOT_HOLD_EMPTY_MS) || t >= BOOT_HOLD_MAX_MS) {
-			if (!empty) log_printf("usb: no watch serial after %lu ms; presenting the idle gadget\n", (unsigned long)t);
+			if (!empty) log_printf("usb: device not known after %lu ms; presenting the idle gadget\n", (unsigned long)t);
 			gadget_release();
 		}
 		return;
@@ -164,7 +199,7 @@ static void gadget_follow(void)
 	if (!gadget_full() || (int32_t)(now - watch_seen_ms) < (int32_t)g_sticky_ms) return;
 	log_printf("usb: no watch for %lu ms; re-presenting the idle gadget\n", (unsigned long)(now - watch_seen_ms));
 	gadget_represent();
-	gadget_set(false, NULL);
+	gadget_set_shape(GADGET_IDLE, NULL);
 }
 
 /* Power state follows the bridge: full clocks while a device is bound (the
@@ -241,9 +276,11 @@ int main(void)
 		 * during the task pass is handled now, not at the next interrupt. */
 		hcd_h3_poll();
 		bridge_poll();
+		mirror_host_poll();
+		mirror_pipes_poll();
 		loops++;
 		__asm__ volatile("cpsid i" ::: "memory");
-		if (!tud_task_event_ready() && !tuh_task_event_ready() && !bridge_host_pending()) {
+		if (!tud_task_event_ready() && !tuh_task_event_ready() && !bridge_host_pending() && !mirror_pipes_host_pending()) {
 			uint32_t t_sleep = time_us();
 			wfi();
 			busy_us -= time_us() - t_sleep;   /* sleeping time is not busy time */

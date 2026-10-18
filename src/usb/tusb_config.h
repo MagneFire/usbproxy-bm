@@ -26,6 +26,7 @@
 #define TUP_OHCI_RHPORTS        1
 #define CFG_TUH_MEM_DCACHE_LINE_SIZE 64
 #define CFG_TUH_DEVICE_MAX      1
+#define CFG_TUH_INTERFACE_MAX   16      /* a mirrored composite device */
 #define CFG_TUH_HUB             0
 #define CFG_TUH_ENUMERATION_BUFSIZE 512
 #define CFG_TUH_API_EDPT_XFER   1

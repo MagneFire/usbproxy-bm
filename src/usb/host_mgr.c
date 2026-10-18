@@ -5,6 +5,7 @@
 #include "host/hcd.h"
 #include "hcd_h3.h"
 #include "host_mgr.h"
+#include "mirror.h"
 #include "bridge/bridge.h"
 #include "bridge/adb_proto.h"
 
@@ -19,8 +20,6 @@ static uint8_t cur_daddr;
 static uint32_t reenum_at;
 static unsigned hs_retries, port_reenables;
 static bool reenum_pending, reclaim_pending;
-/* the device being enumerated has the watch's bridge interfaces */
-static bool enum_watch;
 /* software attach/detach cycles (console `hostcycle N`): unmount + re-enumerate */
 static unsigned cycles_left, cycle_mounts, cycle_fail;
 static uint32_t cycle_next_at, mounts;
@@ -29,16 +28,10 @@ static uint32_t cycle_next_at, mounts;
 static bool drv_init(void) { memset(slots, 0, sizeof slots); return true; }
 static bool drv_deinit(void) { return true; }
 
-static bool watch_interface(const tusb_desc_interface_t *itf)
-{
-	return itf->bInterfaceClass == 0xff && itf->bInterfaceSubClass == 0x42 &&
-	       (itf->bInterfaceProtocol == 0x01 || itf->bInterfaceProtocol == 0x03);
-}
-
 static uint16_t drv_open(uint8_t rhport, uint8_t daddr, tusb_desc_interface_t const *itf, uint16_t max_len)
 {
 	(void)rhport;
-	if (!watch_interface(itf) || itf->bNumEndpoints != 2)
+	if (itf->bInterfaceClass != 0xff || itf->bInterfaceSubClass != 0x42 || itf->bNumEndpoints != 2)
 		return 0;
 	/* a retry pass: the device is about to be reset again, so the bridge
 	 * stays out of it (no bind, no halt pulse on the unbind) */
@@ -99,42 +92,31 @@ static void drv_close(uint8_t daddr)
 		}
 }
 
-static const usbh_class_driver_t bridge_driver = {
-	.name = "bridge",
-	.init = drv_init,
-	.deinit = drv_deinit,
-	.open = drv_open,
-	.set_config = drv_set_config,
-	.xfer_cb = drv_xfer_cb,
-	.close = drv_close,
+/* The bridge first, then the mirror for whatever is not a watch. */
+static const usbh_class_driver_t drivers[] = {
+	{
+		.name = "bridge",
+		.init = drv_init,
+		.deinit = drv_deinit,
+		.open = drv_open,
+		.set_config = drv_set_config,
+		.xfer_cb = drv_xfer_cb,
+		.close = drv_close,
+	},
+	MIRROR_HOST_DRIVER,
 };
 
 usbh_class_driver_t const *usbh_app_driver_get_cb(uint8_t *driver_count)
 {
-	*driver_count = 1;
-	return &bridge_driver;
+	*driver_count = 2;
+	return drivers;
 }
 
 /* ---- device callbacks ------------------------------------------------- */
 void tuh_enum_descriptor_device_cb(uint8_t daddr, const tusb_desc_device_t *d)
 {
 	log_printf("host: device %u descriptor %04x:%04x ep0 %u\n", daddr, d->idVendor, d->idProduct, d->bMaxPacketSize0);
-}
-
-/* The configuration, before the class drivers see its interfaces: is this
- * a watch? */
-bool tuh_enum_descriptor_configuration_cb(uint8_t daddr, uint8_t idx, const tusb_desc_configuration_t *cfg)
-{
-	(void)daddr; (void)idx;
-	const uint8_t *p = (const uint8_t *)cfg;
-	unsigned total = cfg->wTotalLength < CFG_TUH_ENUMERATION_BUFSIZE ? cfg->wTotalLength : CFG_TUH_ENUMERATION_BUFSIZE;
-	const uint8_t *end = p + total;
-	enum_watch = false;
-	for (p += cfg->bLength; p + 2 <= end && p[0] >= 2 && p + p[0] <= end; p += p[0])
-		if (p[1] == TUSB_DESC_INTERFACE && p[0] >= sizeof(tusb_desc_interface_t) &&
-		    watch_interface((const tusb_desc_interface_t *)p))
-			enum_watch = true;
-	return true;
+	mirror_host_device_desc(daddr, d);
 }
 
 /* The watch's serial for the gadget (main.c gadget_watch): printable ASCII
@@ -191,15 +173,16 @@ void tuh_mount_cb(uint8_t daddr)
 		   sp == TUSB_SPEED_HIGH ? "high speed" : sp == TUSB_SPEED_FULL ? "FULL speed" : "low speed");
 	if (sp == TUSB_SPEED_HIGH) {
 		hs_retries = 0;		/* the tries are per attach */
-	} else if (enum_watch && hs_retries < HS_RETRIES) {
+	} else if (mirror_mode() == MIRROR_WATCH && hs_retries < HS_RETRIES) {
 		/* The chirp can be missed on a cold boot: the EHCI resets again. */
 		hs_retries++;
 		reclaim_pending = true;
 		reenum_at = time_ms() + 200;
 		log_printf("host: watch not at high speed; back to the EHCI for another reset (try %u)\n", hs_retries);
 	}
-	if (!reclaim_pending && host_bridged())
-		serial_fetch(daddr);
+	if (reclaim_pending) return;
+	if (host_bridged()) serial_fetch(daddr);
+	else if (mirror_mode() == MIRROR_DEVICE) mirror_host_mounted(daddr);
 }
 
 void tuh_umount_cb(uint8_t daddr)

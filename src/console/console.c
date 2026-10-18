@@ -11,6 +11,8 @@
 #include "usb/usbphy.h"
 #include "usb/gadget_slots.h"
 #include "usb/host_mgr.h"
+#include "usb/mirror.h"
+#include "usb/mirror_pipes.h"
 #include "bridge/bridge.h"
 
 #define LINE_MAX 96
@@ -90,7 +92,7 @@ static void cmd_status(void)
 	char buf[200];
 	snprintf(buf, sizeof buf,
 		"build=%s\nserial=%s\ngadget=%s\nuptime_ms=%lu\nentry_ms=%lu\nticks=%lu\nboots=%lu\nup=%d\n",
-		GITREV, gadget_serial(), gadget_full() ? "full" : "idle", (unsigned long)time_ms(), (unsigned long)g_entry_ms,
+		GITREV, gadget_serial(), gadget_shape_name(), (unsigned long)time_ms(), (unsigned long)g_entry_ms,
 		(unsigned long)tick_count(), (unsigned long)log_boots(), g_up);
 	con_out(buf);
 	snprintf(buf, sizeof buf, "idle=loops:%lu wfis:%lu busy_us:%lu (per s)\n",
@@ -134,6 +136,12 @@ static void cmd_status(void)
 	{
 		static char bbuf[1200];		/* framer + two cycle lines + two bridge lines */
 		bridge_status(bbuf, sizeof bbuf);
+		con_out(bbuf);
+		mirror_host_status(bbuf, sizeof bbuf);
+		con_out(bbuf);
+		mirror_gadget_status(bbuf, sizeof bbuf);
+		con_out(bbuf);
+		mirror_pipes_status(bbuf, sizeof bbuf);
 		con_out(bbuf);
 	}
 	snprintf(buf, sizeof buf, "fault=%s\n", log_fault() ? log_fault() : "none");

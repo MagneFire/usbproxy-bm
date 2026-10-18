@@ -3,6 +3,7 @@
 #include "tusb.h"
 #include "device/usbd_pvt.h"
 #include "gadget_slots.h"
+#include "mirror.h"
 #include "bridge/bridge.h"
 
 struct slot {
@@ -102,21 +103,25 @@ static bool slots_xfer(uint8_t rhport, uint8_t ep_addr, xfer_result_t result, ui
 	return false;
 }
 
-static const usbd_class_driver_t slots_driver = {
-	.name = "slots",
-	.init = slots_init,
-	.deinit = slots_deinit,
-	.reset = slots_reset,
-	.open = slots_open,
-	.control_xfer_cb = slots_control,
-	.xfer_cb = slots_xfer,
-	.sof = NULL,
+/* The watch shape's slots, and the mirror shape's everything. */
+static const usbd_class_driver_t drivers[] = {
+	{
+		.name = "slots",
+		.init = slots_init,
+		.deinit = slots_deinit,
+		.reset = slots_reset,
+		.open = slots_open,
+		.control_xfer_cb = slots_control,
+		.xfer_cb = slots_xfer,
+		.sof = NULL,
+	},
+	MIRROR_GADGET_DRIVER,
 };
 
 usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count)
 {
-	*driver_count = 1;
-	return &slots_driver;
+	*driver_count = 2;
+	return drivers;
 }
 
 const struct slot_stats *slots_stats(int slot) { return &slots[slot].st; }

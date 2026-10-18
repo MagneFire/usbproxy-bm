@@ -25,9 +25,12 @@ const char *log_fault(void);
 uint32_t log_boots(void);
 
 /* usb */
+enum gadget_shape { GADGET_IDLE, GADGET_WATCH, GADGET_MIRROR };
 const char *gadget_serial(void);
-void gadget_set(bool bridge, const char *serial);	/* descriptors only; NULL serial = GADGET_SERIAL */
-bool gadget_full(void);		/* the bridge interfaces are presented */
+void gadget_set_shape(enum gadget_shape s, const char *serial);	/* descriptors and DCD mode; NULL serial = GADGET_SERIAL */
+enum gadget_shape gadget_shape(void);
+const char *gadget_shape_name(void);
+bool gadget_full(void);		/* the watch shape: the bridge interfaces are presented */
 void gadget_watch(const char *serial);	/* host_mgr: a watch mounted (NULL: no serial read) */
 
 /* console */
