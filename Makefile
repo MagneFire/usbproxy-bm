@@ -24,7 +24,8 @@ SRCS := src/start.S src/h3/cache.S \
         src/console/console.c src/console/log.c src/lib/libc.c src/lib/fmt.c \
         $(TUSB)/portable/sunxi/h3/dcd_h3_musb.c src/usb/usbphy.c src/usb/usb_descriptors.c \
         src/usb/gadget_slots.c src/usb/tusb_port.c \
-        $(TUSB)/portable/ehci/h3/ehci_h3.c src/usb/hcd_h3_ehci.c src/usb/host_mgr.c src/bridge/bridge.c \
+        $(TUSB)/portable/ehci/h3/ehci_h3.c $(TUSB)/portable/ohci/h3/ohci_h3.c \
+        src/usb/hcd_h3.c src/usb/host_mgr.c src/bridge/bridge.c \
         $(TUSB)/host/usbh.c $(TUSB)/host/hub.c \
         $(TUSB)/tusb.c $(TUSB)/common/tusb_fifo.c $(TUSB)/device/usbd.c \
         $(TUSB)/class/cdc/cdc_device.c
@@ -36,7 +37,7 @@ CFLAGS := -mcpu=cortex-a7 -marm -mfloat-abi=soft -ffreestanding -nostdlib \
           -Os -g -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
           -ffunction-sections -fdata-sections -fno-common \
           -Isrc -Isrc/usb -I$(TUSB) -I$(TUSB)/portable/ehci \
-          -I$(TUSB)/portable/sunxi/h3 -I$(TUSB)/portable/ehci/h3 \
+          -I$(TUSB)/portable/sunxi/h3 -I$(TUSB)/portable/ehci/h3 -I$(TUSB)/portable/ohci/h3 \
           -I$(BUILD) -DCFG_TUSB_MCU=OPT_MCU_NONE -DGADGET_SERIAL=\"$(GADGET_SERIAL)\"
 CFLAGS += $(EXTRA_CFLAGS)
 ASFLAGS := $(CFLAGS)
