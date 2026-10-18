@@ -18,10 +18,13 @@
 #define CFG_TUD_CDC_TX_BUFSIZE  2048
 #define CFG_TUD_CDC_EP_BUFSIZE  512
 
-/* Host (EHCI1, the watch) */
+/* Host (EHCI1 for high speed, OHCI1 for full and low speed, one port) */
 #define CFG_TUH_ENABLED         1
 #define CFG_TUH_MAX_SPEED       OPT_MODE_HIGH_SPEED
 #define TUP_USBIP_EHCI
+#define TUP_USBIP_OHCI_H3
+#define TUP_OHCI_RHPORTS        1
+#define CFG_TUH_MEM_DCACHE_LINE_SIZE 64
 #define CFG_TUH_DEVICE_MAX      1
 #define CFG_TUH_HUB             0
 #define CFG_TUH_ENUMERATION_BUFSIZE 512

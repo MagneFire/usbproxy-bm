@@ -49,10 +49,12 @@ static inline void clrbits(uintptr_t a, uint32_t m) { REG32(a) &= ~m; }
 #define IRQ_PPI_TIMER_S 29              /* secure physical timer (we run secure) */
 #define IRQ_MUSB        (32 + 71)       /* 103 */
 #define IRQ_EHCI1       (32 + 74)       /* 106 */
+#define IRQ_OHCI1       (32 + 75)       /* 107 */
 
 #define H3_MUSB         0x01c19000u
 #define H3_USBPHY       0x01c19400u     /* ISCR +0, PHYCTL +0x10, OTGCTL +0x20 */
 #define H3_EHCI1        0x01c1b000u
+#define H3_OHCI1        0x01c1b400u
 
 #define CNT_HZ          24000000u
 

@@ -69,7 +69,7 @@ $(BUILD)/fw.elf: $(OBJS) ld/fw.ld
 size: $(BUILD)/fw.bin $(BUILD)/boot0.bin $(BUILD)/felflash.bin
 	@$(SIZE) $(BUILD)/fw.elf $(BUILD)/boot0.elf $(BUILD)/felflash.elf
 	@sz=$$(( $$(wc -c < $(BUILD)/fw.bin) )); echo "fw.bin: $$sz bytes"; \
-	 if [ $$sz -gt 71680 ]; then echo "WARNING: over the 70 KiB soft target"; fi
+	 if [ $$sz -gt 98304 ]; then echo "WARNING: over the 96 KiB soft target"; fi
 
 uimage: $(BUILD)/fw.bin
 	$(MKIMAGE) -A arm -O linux -T kernel -C none -a $(LOAD) -e $(LOAD) \
