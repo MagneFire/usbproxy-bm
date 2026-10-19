@@ -166,8 +166,10 @@ void mirror_pipes_gadget_reset(void)
 	for (unsigned d = 0; d < 2; d++)
 		for (unsigned i = 0; i < MIRROR_EP_MAX - 1; i++) {
 			struct pipe *p = &pipes[d][i];
-			p->open = false;	/* a device completion still due is dropped by gen at the next open */
-			p->g_busy = false;
+			p->open = false;
+			/* a read left posted at the device would swallow its next packet */
+			if (p->d_busy && mirror_daddr()) tuh_edpt_abort_xfer(mirror_daddr(), p->dep);
+			p->g_busy = p->d_busy = false;
 			p->nfull = p->fill = p->drain = 0;
 			p->halted = p->clear_pending = false;
 		}
