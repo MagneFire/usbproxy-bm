@@ -104,6 +104,7 @@ bool tuh_enum_descriptor_configuration_cb(uint8_t daddr, uint8_t idx, const tusb
 		note_string(dev_desc.iProduct);
 		note_string(dev_desc.iSerialNumber);
 		note_string(cfg->iConfiguration);
+		end = cfg_desc + total;
 		for (p = cfg_desc + cfg->bLength; p + 2 <= end && p[0] >= 2 && p + p[0] <= end; p += p[0])
 			if (p[1] == TUSB_DESC_INTERFACE && p[0] >= sizeof(tusb_desc_interface_t))
 				note_string(((const tusb_desc_interface_t *)p)->iInterface);
