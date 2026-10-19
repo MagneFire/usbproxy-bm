@@ -17,6 +17,7 @@
 
 static uint8_t dev_desc[18];
 static uint8_t cfg_hs[MIRROR_CFG_MAX], cfg_fs[MIRROR_CFG_MAX], other_speed[MIRROR_CFG_MAX];
+static unsigned cfg_total;
 static uint8_t qual[10];
 static bool high_speed;
 /* [dir][gadget number] -> device endpoint address, [dir][device number] -> gadget number */
@@ -32,7 +33,15 @@ static uint32_t ctrl_in, ctrl_out, ctrl_nodata, ctrl_stalled, ctrl_stale, ctrl_r
 bool mirror_gadget_high_speed(void) { return high_speed; }
 const uint8_t *mirror_gadget_device(void) { return dev_desc; }
 const uint8_t *mirror_gadget_config(bool high) { return high ? cfg_hs : cfg_fs; }
-const uint8_t *mirror_gadget_other_speed(void) { return high_speed ? other_speed : NULL; }
+/* The configuration for the speed the link is not at: full-speed sizes
+ * from a high-speed link, the device's own from a link that fell back. */
+const uint8_t *mirror_gadget_other_speed(void)
+{
+	if (!high_speed) return NULL;
+	memcpy(other_speed, tud_speed_get() == TUSB_SPEED_HIGH ? cfg_fs : cfg_hs, cfg_total);
+	other_speed[1] = TUSB_DESC_OTHER_SPEED_CONFIG;
+	return other_speed;
+}
 const uint8_t *mirror_gadget_qualifier(void) { return high_speed ? qual : NULL; }
 const uint16_t *mirror_gadget_string(uint8_t index) { return mirror_string(index); }
 
@@ -106,13 +115,11 @@ void mirror_gadget_build(void)
 
 	const uint8_t *cfg = mirror_cfg_desc();
 	const tusb_desc_configuration_t *c = (const tusb_desc_configuration_t *)cfg;
-	unsigned total = c->wTotalLength < MIRROR_CFG_MAX ? c->wTotalLength : MIRROR_CFG_MAX;
-	memcpy(cfg_hs, cfg, total);
-	memcpy(cfg_fs, cfg, total);
+	cfg_total = c->wTotalLength < MIRROR_CFG_MAX ? c->wTotalLength : MIRROR_CFG_MAX;
+	memcpy(cfg_hs, cfg, cfg_total);
+	memcpy(cfg_fs, cfg, cfg_total);
 	rewrite(cfg_hs, false);
 	rewrite(cfg_fs, true);
-	memcpy(other_speed, cfg_fs, total);
-	other_speed[1] = TUSB_DESC_OTHER_SPEED_CONFIG;
 
 	const uint8_t *q = mirror_qualifier();
 	if (q) {
