@@ -6,7 +6,10 @@
  * standard device requests (descriptors from the copies here, the
  * configuration), everything else that reaches a class driver or the
  * vendor hook is forwarded to the device, and its answer or STALL comes
- * back through the control transfer the Mac is still waiting on. */
+ * back through the control transfer the Mac is still waiting on. The
+ * pipes are the endpoints of each interface's alternate setting 0, on
+ * both sides; another alternate is refused rather than switched on the
+ * device alone. */
 #include <string.h>
 #include "fw.h"
 #include "tusb.h"
@@ -206,6 +209,12 @@ static bool mirror_ctrl(uint8_t rhport, uint8_t stage, const tusb_control_reques
 				mirror_host_ctrl(&r, NULL, NULL, 0);
 			}
 			return true;
+		}
+		if (req->bmRequestType_bit.type == TUSB_REQ_TYPE_STANDARD &&
+		    req->bmRequestType_bit.recipient == TUSB_REQ_RCPT_INTERFACE &&
+		    req->bRequest == TUSB_REQ_SET_INTERFACE && tu_u16_low(req->wValue)) {
+			ctrl_refused++;
+			return false;
 		}
 		pending = *req;
 		if (pending.bmRequestType_bit.recipient == TUSB_REQ_RCPT_ENDPOINT)
