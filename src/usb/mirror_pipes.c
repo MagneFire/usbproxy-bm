@@ -1,11 +1,11 @@
 /* The mirror's data endpoints. A pipe is one gadget endpoint and the device
- * endpoint behind it, with two buffers between them: an IN pipe keeps a
- * read posted at the device and hands each completed read (a packet, or
- * a high-speed bulk transfer up to a buffer, a ZLP as itself) to the
- * gadget; an OUT pipe keeps a read posted at the gadget and writes each
- * completed read to the device in order. A STALL from the device halts the gadget endpoint until the Mac
- * clears it, which clears the device's too. Store-and-forward, one transfer
- * in flight per side; the completions come through the interrupts. */
+ * endpoint behind it, with two packet buffers between them: an IN pipe
+ * keeps a read posted at the device and hands each completed packet (a
+ * ZLP as itself) to the gadget; an OUT pipe keeps a read posted at the
+ * gadget and writes each completed packet to the device in order. A STALL
+ * from the device halts the gadget endpoint until the Mac clears it, which
+ * clears the device's too. Store-and-forward, one transfer in flight per
+ * side; the completions come through the interrupts. */
 #include <string.h>
 #include "fw.h"
 #include "tusb.h"
@@ -14,7 +14,7 @@
 #include "mirror_pipes.h"
 
 #define NBUF     2
-#define PIPE_BUF 2048
+#define PIPE_BUF 1024		/* the largest packet USB 2.0 allows (interrupt at high speed) */
 #define RETRY_MS 10
 
 struct pipe {
@@ -41,14 +41,13 @@ static struct pipe *pipe_of(uint8_t gep)
 
 static bool is_in(const struct pipe *p) { return p->gep & 0x80; }
 
-/* A transfer completes only on a short packet or a full buffer, so a buffer
- * larger than a packet holds data that ends on a packet boundary until
- * more follows (a 64-byte line typed at a serial port). Full-speed pipes
- * and interrupt pipes move one packet per transfer; a high-speed mirror's
- * bulk pipes trade that for throughput. */
+/* One packet per transfer. A transfer completes only on a short packet or
+ * a full buffer, so a buffer larger than a packet would hold data that
+ * ends on a packet boundary until more followed: a 512-byte sector the Mac
+ * writes and then waits on, a 64-byte line typed at a serial port. */
 static uint16_t read_len(const struct pipe *p)
 {
-	return p->type == TUSB_XFER_INTERRUPT || !mirror_gadget_high_speed() ? p->mps : PIPE_BUF;
+	return p->mps < PIPE_BUF ? p->mps : PIPE_BUF;
 }
 
 static void dev_in_done(tuh_xfer_t *x);
