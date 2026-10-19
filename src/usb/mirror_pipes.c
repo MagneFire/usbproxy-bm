@@ -97,6 +97,7 @@ static void dev_in_done(tuh_xfer_t *x)
 		p->stalls++;
 		p->halted = true;
 		usbd_edpt_stall(0, p->gep);
+		p->g_busy = false;	/* the stall cancels a transfer in flight without a completion */
 	} else {
 		p->fails++;
 		p->retry_at = time_ms() + RETRY_MS;
