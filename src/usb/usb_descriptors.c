@@ -137,6 +137,13 @@ uint8_t const *tud_descriptor_device_qualifier_cb(void)
 	return (uint8_t const *)&desc_qualifier;
 }
 
+/* A mirrored device's BOS descriptor (WebUSB, MS OS 2.0 and the like);
+ * the watch and idle shapes have none. */
+uint8_t const *tud_descriptor_bos_cb(void)
+{
+	return shape == GADGET_MIRROR ? mirror_bos() : NULL;
+}
+
 static uint8_t desc_other_speed[CONFIG_TOTAL_LEN];
 
 uint8_t const *tud_descriptor_other_speed_configuration_cb(uint8_t index)
